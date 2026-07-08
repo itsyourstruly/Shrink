@@ -40,6 +40,17 @@ struct ProcessingOverlay: View {
         let compressedSizeString = FileItem.formatBytes(result.newSize)
         let compressedDestination = result.compressedURL.deletingLastPathComponent().path
         
+        let timeString: String = {
+            let seconds = result.elapsedSeconds
+            if seconds < 60 {
+                return "\(seconds)s"
+            } else {
+                let minutes = seconds / 60
+                let remainingSeconds = seconds % 60
+                return "\(minutes)m \(remainingSeconds)s"
+            }
+        }()
+        
         let compressedType: FileType = {
             let ext = result.compressedURL.pathExtension.lowercased()
             if ["zip", "tar", "gz", "tgz", "7z", "rar", "bz2", "xz"].contains(ext) {
@@ -112,37 +123,42 @@ struct ProcessingOverlay: View {
             }
             .padding(.top, 8)
             
-            // Location Text centered below both
-            Button(action: {
-                NSWorkspace.shared.selectFile(result.compressedURL.path, inFileViewerRootedAtPath: "")
-            }) {
-                Text("in \(compressedDestination)")
-                    .font(.system(size: 12))
-                    .foregroundColor(.blue)
-                    .underline(isHoveredLocation)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 320)
+            // Location, duration, and action button grouped with tight spacing
+            VStack(spacing: 10) {
+                Button(action: {
+                    NSWorkspace.shared.selectFile(result.compressedURL.path, inFileViewerRootedAtPath: "")
+                }) {
+                    Text("in \(compressedDestination)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.blue)
+                        .underline(isHoveredLocation)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    isHoveredLocation = hovering
+                }
+                
+                Text("Took \(timeString)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .padding(.bottom, 4)
+                
+                // Done Button (Nice)
+                Button(action: state.dismissCompletion) {
+                    Text("Nice")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 36)
+                        .padding(.vertical, 10)
+                        .background(Color.blue)
+                        .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                isHoveredLocation = hovering
-            }
-            .padding(.horizontal, 12)
-            
-            // Done Button
-            Button(action: state.dismissCompletion) {
-                Text("Done")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 36)
-                    .padding(.vertical, 10)
-                    .background(Color.blue)
-                    .cornerRadius(8)
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
         }
         .padding(28)
         .background(Color(nsColor: .windowBackgroundColor))
