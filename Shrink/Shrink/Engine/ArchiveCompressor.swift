@@ -536,6 +536,13 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
         let cleanErrorLog = SafeString()
         let errorData = SafeData()
         
+        let safeProgressVal = SafeProgressValue(0.05)
+        let reportProgress: @Sendable (Double) -> Void = { val in
+            if let updated = safeProgressVal.updateMax(val) {
+                progressHandler(updated)
+            }
+        }
+        
         // Define handlers once to be used for both live reading and final read.
         let outputHandler: @Sendable (FileHandle) -> Void = { handle in
             let data = handle.availableData
@@ -544,7 +551,7 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
                 let lines = outputBuffer.valueAndClearLines
                 for line in lines {
                     if let progress = progressParser(line, totalFiles, processedCount) {
-                        progressHandler(progress)
+                        reportProgress(progress)
                     }
                 }
             }
@@ -560,7 +567,7 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
                     let lines = errorBuffer.valueAndClearLines
                     for line in lines {
                         if let progress = progressParser(line, totalFiles, processedCount) {
-                            progressHandler(progress)
+                            reportProgress(progress)
                         } else {
                             cleanErrorLog.append(line + "\n")
                         }
@@ -570,9 +577,29 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
         }
         errorPipe.fileHandleForReading.readabilityHandler = errorHandler
         
+        let isDone = SafeBool(false)
+        let timerTask = Task {
+            var elapsed = 0.0
+            while !isDone.value {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                if isDone.value { break }
+                elapsed += 0.1
+                // Asymptotic progress curve from 0.05 to 0.99
+                let prog = 0.05 + (1.0 - exp(-elapsed / 15.0)) * 0.94
+                reportProgress(prog)
+            }
+        }
+        
         return try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { proc in
                 print("[ARCHIVE DEBUG] Process terminationHandler invoked for PID \(proc.processIdentifier). exitStatus: \(proc.terminationStatus)")
+                
+                isDone.setValue(true)
+                timerTask.cancel()
+                
+                // Clear readability handlers first to prevent race conditions during final read.
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                errorPipe.fileHandleForReading.readabilityHandler = nil
                 
                 // Perform a final read to catch any remaining data that wasn't followed by a newline.
                 outputHandler(outputPipe.fileHandleForReading)
@@ -582,21 +609,18 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
                 let remainingOutput = outputBuffer.currentValue
                 if !remainingOutput.isEmpty {
                     if let progress = progressParser(remainingOutput, totalFiles, processedCount) {
-                        progressHandler(progress)
+                        reportProgress(progress)
                     }
                 }
                 
                 let remainingError = errorBuffer.currentValue
                 if !remainingError.isEmpty {
                     if let progress = progressParser(remainingError, totalFiles, processedCount) {
-                        progressHandler(progress)
+                        reportProgress(progress)
                     } else {
                         cleanErrorLog.append(remainingError)
                     }
                 }
-                
-                outputPipe.fileHandleForReading.readabilityHandler = nil
-                errorPipe.fileHandleForReading.readabilityHandler = nil
                 
                 let cancelled = self.processQueue.sync { () -> Bool in
                     self.activeProcess = nil
@@ -605,7 +629,7 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
                 
                 print("[ARCHIVE DEBUG] isCancelled value: \(cancelled)")
                 if proc.terminationStatus == 0 {
-                    progressHandler(1.0)
+                    reportProgress(1.0)
                     continuation.resume()
                 } else {
                     if cancelled {
@@ -631,6 +655,8 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
 
                 try process.run()
             } catch {
+                isDone.setValue(true)
+                timerTask.cancel()
                 if (error as NSError).code == 99 {
                     continuation.resume(throwing: NSError(domain: "ArchiveCompressorError", code: 99, userInfo: [NSLocalizedDescriptionKey: "Operation stopped by user"]))
                     return
@@ -1255,5 +1281,30 @@ nonisolated private final class SafeBool: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         _value = newValue
+    }
+}
+
+nonisolated private final class SafeProgressValue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0.0
+    
+    init(_ startValue: Double = 0.0) {
+        self.value = startValue
+    }
+    
+    func updateMax(_ newValue: Double) -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        if newValue > value {
+            value = newValue
+            return newValue
+        }
+        return nil
+    }
+    
+    var currentValue: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }
