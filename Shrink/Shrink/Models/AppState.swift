@@ -6,6 +6,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import Sparkle
 
 enum AppMode: String, CaseIterable, Identifiable, Sendable {
     case compress = "Compress"
@@ -200,6 +201,35 @@ class AppState {
     @ObservationIgnored
     private var settingsObserver: Any? = nil
     
+    // Sparkle Updater
+    @ObservationIgnored
+    var updaterController: SPUStandardUpdaterController? = nil
+    
+    @ObservationIgnored
+    private var canCheckForUpdatesObservation: NSKeyValueObservation?
+    @ObservationIgnored
+    private var automaticallyChecksObservation: NSKeyValueObservation?
+    @ObservationIgnored
+    private var automaticallyDownloadsObservation: NSKeyValueObservation?
+    
+    var canCheckForUpdates = false
+    
+    var automaticallyChecksForUpdates = false {
+        didSet {
+            if let updater = updaterController?.updater, updater.automaticallyChecksForUpdates != automaticallyChecksForUpdates {
+                updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+            }
+        }
+    }
+    
+    var automaticallyDownloadsUpdates = false {
+        didSet {
+            if let updater = updaterController?.updater, updater.automaticallyDownloadsUpdates != automaticallyDownloadsUpdates {
+                updater.automaticallyDownloadsUpdates = automaticallyDownloadsUpdates
+            }
+        }
+    }
+    
     init() {
         var defaults: [String: Any] = [
             "default_suffix": "_shrunk",
@@ -251,12 +281,43 @@ class AppState {
         
         // Initial load
         self.loadSettings()
+        
+        // Initialize Sparkle Updater
+        let controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        self.updaterController = controller
+        
+        let updater = controller.updater
+        self.canCheckForUpdates = updater.canCheckForUpdates
+        self.automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
+        self.automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
+        
+        self.canCheckForUpdatesObservation = updater.observe(\.canCheckForUpdates, options: [.new]) { [weak self] updater, _ in
+            Task { @MainActor in
+                self?.canCheckForUpdates = updater.canCheckForUpdates
+            }
+        }
+        
+        self.automaticallyChecksObservation = updater.observe(\.automaticallyChecksForUpdates, options: [.new]) { [weak self] updater, _ in
+            Task { @MainActor in
+                self?.automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
+            }
+        }
+        
+        self.automaticallyDownloadsObservation = updater.observe(\.automaticallyDownloadsUpdates, options: [.new]) { [weak self] updater, _ in
+            Task { @MainActor in
+                self?.automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
+            }
+        }
     }
     
     deinit {
         if let observer = settingsObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+    }
+    
+    func checkForUpdates() {
+        updaterController?.checkForUpdates(nil)
     }
     
     private func loadSettings() {

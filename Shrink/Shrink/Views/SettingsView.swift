@@ -29,6 +29,11 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Plugins", systemImage: "puzzlepiece")
                 }
+            
+            UpdateSettingsView(state: state)
+                .tabItem {
+                    Label("Update", systemImage: "arrow.down.circle")
+                }
         }
         .frame(width: 520, height: 420)
     }
@@ -748,5 +753,78 @@ struct ConversionSettingsView: View {
         default:
             return "Using built-in libraries to convert"
         }
+    }
+}
+
+struct UpdateSettingsView: View {
+    var state: AppState
+    
+    var body: some View {
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Updates")
+                        .font(.headline)
+                    
+                    Toggle(isOn: Binding(
+                        get: { state.automaticallyChecksForUpdates },
+                        set: { state.automaticallyChecksForUpdates = $0 }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Automatically check for updates")
+                                .font(.body)
+                            Text("Keep Shrink up-to-date with new features and bug fixes.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    
+                    Toggle(isOn: Binding(
+                        get: { state.automaticallyDownloadsUpdates },
+                        set: { state.automaticallyDownloadsUpdates = $0 }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Automatically download updates")
+                                .font(.body)
+                            Text("Download updates in the background and notify you when ready to install.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(!state.automaticallyChecksForUpdates)
+                }
+                .padding(.vertical, 8)
+            }
+            
+            Divider()
+                .padding(.vertical, 8)
+            
+            Section {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Check for Updates")
+                            .font(.headline)
+                        Text("Manually query the update server for a newer version of Shrink.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        state.checkForUpdates()
+                    }) {
+                        Text("Check Now")
+                            .frame(minWidth: 80)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!state.canCheckForUpdates)
+                }
+                .padding(.vertical, 8)
+            }
+            
+            Spacer()
+        }
+        .padding(24)
     }
 }

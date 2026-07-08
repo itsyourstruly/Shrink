@@ -10,6 +10,7 @@
 		B91F07C12FEC54F400E1F5BF /* 7zz in Resources */ = {isa = PBXBuildFile; fileRef = B91F07C02FEC54F300E1F5BF /* 7zz */; };
 		B91F07C32FEC550600E1F5BF /* unar in Resources */ = {isa = PBXBuildFile; fileRef = B91F07C22FEC550600E1F5BF /* unar */; };
 		B91F07D62FEC7ED900E1F5BF /* ShrinkExtensions.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B91F07CE2FEC7ED900E1F5BF /* ShrinkExtensions.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B95FEE492FFDF53000AD5DD5 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = B95FEE482FFDF53000AD5DD5 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +52,13 @@
 			);
 			target = B91F07CD2FEC7ED900E1F5BF /* ShrinkExtensions */;
 		};
+		B95FEE4B2FFDF90900AD5DD5 /* Exceptions for "Shrink" folder in "Shrink" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B91FDB642FE73CD000E1F5BF /* Shrink */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -64,6 +72,9 @@
 		};
 		B91FDB672FE73CD000E1F5BF /* Shrink */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B95FEE4B2FFDF90900AD5DD5 /* Exceptions for "Shrink" folder in "Shrink" target */,
+			);
 			path = Shrink;
 			sourceTree = "<group>";
 		};
@@ -81,6 +92,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B95FEE492FFDF53000AD5DD5 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,6 +163,7 @@
 			);
 			name = Shrink;
 			packageProductDependencies = (
+				B95FEE482FFDF53000AD5DD5 /* Sparkle */,
 			);
 			productName = Shrink;
 			productReference = B91FDB652FE73CD000E1F5BF /* Shrink.app */;
@@ -183,6 +196,9 @@
 			);
 			mainGroup = B91FDB5C2FE73CD000E1F5BF;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B95FEE472FFDF53000AD5DD5 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B91FDB662FE73CD000E1F5BF /* Products */;
 			projectDirPath = "";
@@ -428,19 +444,20 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 674BLKXUR9;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Shrink/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = amo.Shrink;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -460,19 +477,20 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 674BLKXUR9;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Shrink/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = amo.Shrink;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -516,6 +534,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		B95FEE472FFDF53000AD5DD5 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B95FEE482FFDF53000AD5DD5 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B95FEE472FFDF53000AD5DD5 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B91FDB5D2FE73CD000E1F5BF /* Project object */;
 }

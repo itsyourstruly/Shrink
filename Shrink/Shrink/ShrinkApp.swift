@@ -20,6 +20,14 @@ struct ShrinkApp: App {
         WindowGroup {
             ContentView(state: state)
         }
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    state.checkForUpdates()
+                }
+                .disabled(!state.canCheckForUpdates)
+            }
+        }
         Settings {
             SettingsView(state: state)
         }
