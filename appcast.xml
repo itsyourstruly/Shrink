@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Shrink</title>
+        <item>
+            <title>1.0.2</title>
+            <pubDate>Wed, 08 Jul 2026 04:19:37 +0000</pubDate>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <enclosure url="https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/Shrink-v1.0.13.dmg" length="5652492" type="application/octet-stream" sparkle:edSignature="02gryb5L13yN3LkAi9r32sgxhmkGSHjwFPwQA1d422KFE6WJw12IRfS5FbAIsWL+c10qEFf/Dgj1ILNFsLuxAQ=="/>
+        </item>
+    </channel>
+</rss>
