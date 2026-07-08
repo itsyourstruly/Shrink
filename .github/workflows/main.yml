@@ -33,7 +33,7 @@ jobs:
       - name: Install create-dmg utility
         run: brew install create-dmg
 
-      - name: Prepare Packaging Directory
+     - name: Prepare Packaging Directory
         run: |
           mkdir -p dist/dmg-root
           # Recursively finds Shrink.app anywhere inside the Build folder
@@ -44,6 +44,11 @@ jobs:
           fi
           echo "Found app at: $APP_PATH"
           cp -R "$APP_PATH" dist/dmg-root/
+
+      - name: Unify Code Signatures
+        run: |
+          # Forces the app and all embedded frameworks (like Sparkle) to share the exact same ad-hoc signature
+          codesign --force --deep -s - dist/dmg-root/Shrink.app
 
       - name: Package App into DMG
         run: |
