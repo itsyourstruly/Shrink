@@ -75,9 +75,12 @@ jobs:
             cp appcast.xml deploy/
           fi
           
-          # Execute binary targeting your specific public key signature
+          # Write the public key string into a temporary file
+          echo "8vw86bFWwPrPG2NERblya5qbUwuJGotKrO2ogsYqDa0=" > dsa_pub.txt
+          
+          # Execute binary pointing to the public key file
           ./sparkle-cli/bin/generate_appcast \
-            --ed-public-key "8vw86bFWwPrPG2NERblya5qbUwuJGotKrO2ogsYqDa0=" \
+            --public-key-file dsa_pub.txt \
             deploy/
           
           # Move updated deployment manifest back out to root for repository tracking
