@@ -28,12 +28,13 @@ jobs:
                      -derivedDataPath Build/ \
                      CODE_SIGN_IDENTITY="-" \
                      CODE_SIGN_STYLE="Manual" \
+                     CODE_SIGNING_ALLOWED=NO \
                      clean build
 
       - name: Install create-dmg utility
         run: brew install create-dmg
 
-     - name: Prepare Packaging Directory
+      - name: Prepare Packaging Directory
         run: |
           mkdir -p dist/dmg-root
           # Recursively finds Shrink.app anywhere inside the Build folder
