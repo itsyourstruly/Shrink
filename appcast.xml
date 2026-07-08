@@ -8,7 +8,7 @@
             <sparkle:version>3</sparkle:version>
             <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
-            <enclosure url="https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/Shrink-v1.0.13.dmg" length="5652492" type="application/octet-stream" sparkle:edSignature="02gryb5L13yN3LkAi9r32sgxhmkGSHjwFPwQA1d422KFE6WJw12IRfS5FbAIsWL+c10qEFf/Dgj1ILNFsLuxAQ=="/>
+            <enclosure url="https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/Shrink-v1.0.16.dmg" length="5671012" type="application/octet-stream" sparkle:edSignature="lLi7+qObq5wfzpiG1UHzlTXtM6KkEhkw5AT+JQp/WSkV7APqHkpy/Kz1kSGyd+bly0BLE7JWpf4crxWQtAx8CQ=="/>
         </item>
     </channel>
 </rss>
