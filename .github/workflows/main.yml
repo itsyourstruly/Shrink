@@ -15,7 +15,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetches full history so generate_appcast can parse older releases if needed
+          fetch-depth: 0
 
       - name: Select Xcode Version
         run: sudo xcode-select -s /Applications/Xcode.app
@@ -26,7 +26,8 @@ jobs:
                      -scheme "Shrink" \
                      -configuration Release \
                      -derivedDataPath Build/ \
-                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGN_IDENTITY="-" \
+                     CODE_SIGN_STYLE="Manual" \
                      clean build
 
       - name: Install create-dmg utility
@@ -59,47 +60,34 @@ jobs:
 
       - name: Download Sparkle Tools for Appcast Generation
         run: |
-          # Pulls the official standalone release binaries so the runner can use generate_appcast
           curl -L -o sparkle.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz
           mkdir sparkle-cli
           tar -xf sparkle.tar.xz -C sparkle-cli
 
       - name: Generate Appcast XML
         run: |
-          # Setup an isolated tracking directory for the Sparkle parser
           mkdir -p deploy
           cp dist/*.dmg deploy/
           
-          # Pull down existing appcast file if it lives in main branch so we append to history
           if [ -f appcast.xml ]; then
             cp appcast.xml deploy/
           fi
           
-          # Write the public key string into a temporary file
-          echo "8vw86bFWwPrPG2NERblya5qbUwuJGotKrO2ogsYqDa0=" > dsa_pub.txt
+          # Pipes the private key securely from GitHub Secrets directly into the tool
+          echo "${{ secrets.SPARKLE_PRIVATE_KEY }}" | ./sparkle-cli/bin/generate_appcast --ed-key-file - deploy/
           
-          # Execute binary pointing to the public key file
-          ./sparkle-cli/bin/generate_appcast \
-            --public-key-file dsa_pub.txt \
-            deploy/
-          
-          # Move updated deployment manifest back out to root for repository tracking
           cp deploy/appcast.xml ./appcast.xml
-        env:
-          SPARKLE_CLEAN_SIGNATURE_VERIFICATION: "1" # Instructs Sparkle to bypass local execution checks
 
       - name: Commit and Push Updated Appcast to Main Branch
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Stash running files to execute a clean pull/switch
           git stash --include-untracked || true
           git checkout main
           git pull origin main
           git stash pop || true
           
-          # Stage and sync upstream
           git add appcast.xml
           git commit -m "Update appcast.xml for release ${{ github.ref_name }} [skip ci]" || echo "No changes to commit"
           git push origin main
