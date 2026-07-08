@@ -1,0 +1,21 @@
+unar v1.10.1 (May 19 2016), a tool for extracting the contents of archive files.
+Usage: unar [options] archive [files ...]
+
+Available options:
+-output-directory (-o) <string>         The directory to write the contents of the archive to. Defaults to the current directory. If set to a single dash (-), no files will be created, and all data will be output to stdout.
+-force-overwrite (-f)                   Always overwrite files when a file to be unpacked already exists on disk. By default, the program asks the user if possible, otherwise skips the file.
+-force-rename (-r)                      Always rename files when a file to be unpacked already exists on disk.
+-force-skip (-s)                        Always skip files when a file to be unpacked already exists on disk.
+-force-directory (-d)                   Always create a containing directory for the contents of the unpacked archive. By default, a directory is created if there is more than one top-level file or folder.
+-no-directory (-D)                      Never create a containing directory for the contents of the unpacked archive.
+-password (-p) <string>                 The password to use for decrypting protected archives.
+-encoding (-e) <encoding name>          The encoding to use for filenames in the archive, when it is not known. If not specified, the program attempts to auto-detect the encoding used. Use "help" or "list" as the argument to give a listing of all supported encodings.
+-password-encoding (-E) <name>          The encoding to use for the password for the archive, when it is not known. If not specified, then either the encoding given by the -encoding option or the auto-detected encoding is used.
+-indexes (-i)                           Instead of specifying the files to unpack as filenames or wildcard patterns, specify them as indexes, as output by lsar.
+-no-recursion (-nr)                     Do not attempt to extract archives contained in other archives. For instance, when unpacking a .tar.gz file, only unpack the .gz file and not its contents.
+-copy-time (-t)                         Copy the file modification time from the archive file to the containing directory, if one is created.
+-no-quarantine (-nq)                    Do not copy Finder quarantine metadata from the archive to the extracted files.
+-forks (-k) <fork|visible|hidden|skip>  How to handle Mac OS resource forks. "fork" creates regular resource forks, "visible" creates AppleDouble files with the extension ".rsrc", "hidden" creates AppleDouble files with the prefix "._", and "skip" discards all resource forks. Defaults to "fork".
+-quiet (-q)                             Run in quiet mode.
+-version (-v)                           Print version and exit.
+-help (-h)                              Display this information.
