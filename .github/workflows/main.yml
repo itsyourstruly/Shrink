@@ -35,12 +35,13 @@ jobs:
       - name: Prepare Packaging Directory
         run: |
           mkdir -p dist/dmg-root
-          # Locates the compiled application inside the Xcode derived data path
-          APP_PATH=$(find Build/Products/Release -name "Shrink.app" -maxdepth 2)
+          # Recursively finds Shrink.app anywhere inside the Build folder
+          APP_PATH=$(find Build -name "Shrink.app" -type d -maxdepth 4 | head -n 1)
           if [ -z "$APP_PATH" ]; then
             echo "Error: Shrink.app could not be found in the build directory."
             exit 1
           fi
+          echo "Found app at: $APP_PATH"
           cp -R "$APP_PATH" dist/dmg-root/
 
       - name: Package App into DMG
