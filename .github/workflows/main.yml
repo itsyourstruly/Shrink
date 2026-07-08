@@ -26,6 +26,7 @@ jobs:
                      -scheme "Shrink" \
                      -configuration Release \
                      -derivedDataPath Build/ \
+                     CODE_SIGNING_ALLOWED=NO \
                      clean build
 
       - name: Install create-dmg utility
