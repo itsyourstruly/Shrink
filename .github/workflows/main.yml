@@ -1,0 +1,104 @@
+name: Build, Sign, and Update Appcast
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers when you push a semantic version tag (e.g., v1.0.0)
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetches full history so generate_appcast can parse older releases if needed
+
+      - name: Select Xcode Version
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build macOS App
+        run: |
+          xcodebuild -scheme "Shrink" \
+                     -configuration Release \
+                     -derivedDataPath Build/ \
+                     clean build
+
+      - name: Install create-dmg utility
+        run: brew install create-dmg
+
+      - name: Prepare Packaging Directory
+        run: |
+          mkdir -p dist/dmg-root
+          # Locates the compiled application inside the Xcode derived data path
+          APP_PATH=$(find Build/Products/Release -name "Shrink.app" -maxdepth 2)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: Shrink.app could not be found in the build directory."
+            exit 1
+          fi
+          cp -R "$APP_PATH" dist/dmg-root/
+
+      - name: Package App into DMG
+        run: |
+          create-dmg \
+            --volname "Shrink" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "Shrink.app" 175 190 \
+            --hide-extension "Shrink.app" \
+            --app-drop-link 425 190 \
+            "dist/Shrink-${{ github.ref_name }}.dmg" \
+            "dist/dmg-root/"
+
+      - name: Download Sparkle Tools for Appcast Generation
+        run: |
+          # Pulls the official, safe standalone release binaries matching Sparkle's stable architecture
+          curl -L -o sparkle.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz
+          mkdir sparkle-cli
+          tar -xf sparkle.tar.xz -C sparkle-cli
+
+      - name: Generate Appcast XML
+        run: |
+          # Setup an isolated tracking directory for the Sparkle parser
+          mkdir -p deploy
+          cp dist/*.dmg deploy/
+          
+          # Pull down existing appcast file if it lives in main branch so we append to history instead of erasing it
+          if [ -f appcast.xml ]; then
+            cp appcast.xml deploy/
+          fi
+          
+          # Execute the official binary to extract metadata and register changes
+          ./sparkle-cli/bin/generate_appcast deploy/
+          
+          # Move updated deployment manifest back out to root for repository tracking
+          cp deploy/appcast.xml ./appcast.xml
+
+      - name: Commit and Push Updated Appcast to Main Branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Stash or clear running files to execute a clean pull/switch
+          git stash --include-untracked || true
+          git checkout main
+          git pull origin main
+          git stash pop || true
+          
+          # Stage, register structural metadata changes, and sync upstream
+          git add appcast.xml
+          git commit -m "Update appcast.xml for release ${{ github.ref_name }} [skip ci]" || echo "No changes to commit"
+          git push origin main
+
+      - name: Create GitHub Release and Upload DMG
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          name: "Shrink ${{ github.ref_name }}"
+          body: "Automated distribution release for version ${{ github.ref_name }}."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
