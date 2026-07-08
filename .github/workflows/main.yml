@@ -20,9 +20,10 @@ jobs:
       - name: Select Xcode Version
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Build macOS App
+    - name: Build macOS App
         run: |
-          xcodebuild -scheme "Shrink" \
+          xcodebuild -project "Shrink/Shrink.xcodeproj" \
+                     -scheme "Shrink" \
                      -configuration Release \
                      -derivedDataPath Build/ \
                      clean build
