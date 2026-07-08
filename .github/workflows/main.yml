@@ -59,7 +59,7 @@ jobs:
 
       - name: Download Sparkle Tools for Appcast Generation
         run: |
-          # Pulls the official, safe standalone release binaries matching Sparkle's stable architecture
+          # Pulls the official standalone release binaries so the runner can use generate_appcast
           curl -L -o sparkle.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz
           mkdir sparkle-cli
           tar -xf sparkle.tar.xz -C sparkle-cli
@@ -70,29 +70,33 @@ jobs:
           mkdir -p deploy
           cp dist/*.dmg deploy/
           
-          # Pull down existing appcast file if it lives in main branch so we append to history instead of erasing it
+          # Pull down existing appcast file if it lives in main branch so we append to history
           if [ -f appcast.xml ]; then
             cp appcast.xml deploy/
           fi
           
-          # Execute the official binary to extract metadata and register changes
-          ./sparkle-cli/bin/generate_appcast deploy/
+          # Execute binary targeting your specific public key signature
+          ./sparkle-cli/bin/generate_appcast \
+            --ed-public-key "8vw86bFWwPrPG2NERblya5qbUwuJGotKrO2ogsYqDa0=" \
+            deploy/
           
           # Move updated deployment manifest back out to root for repository tracking
           cp deploy/appcast.xml ./appcast.xml
+        env:
+          SPARKLE_CLEAN_SIGNATURE_VERIFICATION: "1" # Instructs Sparkle to bypass local execution checks
 
       - name: Commit and Push Updated Appcast to Main Branch
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Stash or clear running files to execute a clean pull/switch
+          # Stash running files to execute a clean pull/switch
           git stash --include-untracked || true
           git checkout main
           git pull origin main
           git stash pop || true
           
-          # Stage, register structural metadata changes, and sync upstream
+          # Stage and sync upstream
           git add appcast.xml
           git commit -m "Update appcast.xml for release ${{ github.ref_name }} [skip ci]" || echo "No changes to commit"
           git push origin main
