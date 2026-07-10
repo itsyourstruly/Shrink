@@ -164,16 +164,6 @@ struct SidebarView: View {
                             } else {
                                 // Archive/General settings at the top
                                 VStack(alignment: .leading, spacing: 10) {
-                                    HStack {
-                                        Text("Output Style")
-                                            .font(.system(size: 11))
-                                        Spacer()
-                                        Text("Single Archive")
-                                            .font(.system(size: 11, weight: .bold))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .padding(.vertical, 2)
-                                    
                                     Picker("Format", selection: $state.archiveSettings.format) {
                                         Text("ZIP").tag(ArchiveFormat.zip)
                                         Text("TAR").tag(ArchiveFormat.tar)

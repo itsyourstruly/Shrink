@@ -152,7 +152,7 @@ struct ArchiveFormatsSettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 // Section: Compress Into
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Compression Formats (Compress Into)", systemImage: "arrow.down.doc.fill")
+                    Text("Compression Formats (Compress Into)")
                         .font(.headline)
                         .foregroundStyle(.blue)
                     
@@ -184,7 +184,7 @@ struct ArchiveFormatsSettingsView: View {
                 
                 // Section: Decompress From
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Decompression Formats (Decompress From)", systemImage: "arrow.up.doc.fill")
+                    Text("Decompression Formats (Decompress From)")
                         .font(.headline)
                         .foregroundStyle(.green)
                     
@@ -216,11 +216,6 @@ struct ArchiveFormatsSettingsView: View {
     @ViewBuilder
     private func formatToggleRow(title: String, icon: String, isEnabled: Binding<Bool>, color: Color, backendLabel: String, isAvailable: Bool) -> some View {
         HStack {
-            Image(systemName: icon)
-                .font(.system(size: 16))
-                .foregroundColor(color)
-                .frame(width: 24, height: 24)
-            
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.body)
@@ -337,7 +332,7 @@ struct PluginsSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("Tool Preferences", systemImage: "puzzlepiece.fill")
+                    Text("Tool Preferences")
                         .font(.headline)
                         .foregroundStyle(.blue)
                     
@@ -594,7 +589,7 @@ struct ConversionSettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 // Section: Images
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Image Conversion Formats", systemImage: "photo")
+                    Text("Image Conversion Formats")
                         .font(.headline)
                         .foregroundStyle(.blue)
                     
@@ -621,7 +616,7 @@ struct ConversionSettingsView: View {
                 
                 // Section: Videos
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Video Conversion Formats", systemImage: "video")
+                    Text("Video Conversion Formats")
                         .font(.headline)
                         .foregroundStyle(.blue)
                     
@@ -648,7 +643,7 @@ struct ConversionSettingsView: View {
                 
                 // Section: Audio
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Audio Conversion Formats", systemImage: "waveform")
+                    Text("Audio Conversion Formats")
                         .font(.headline)
                         .foregroundStyle(.orange)
                     
@@ -675,7 +670,7 @@ struct ConversionSettingsView: View {
                 
                 // Section: Documents
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Document Conversion Formats", systemImage: "doc.text")
+                    Text("Document Conversion Formats")
                         .font(.headline)
                         .foregroundStyle(.green)
                     
@@ -714,11 +709,6 @@ struct ConversionSettingsView: View {
     @ViewBuilder
     private func formatToggleRow(title: String, isEnabled: Binding<Bool>, backendLabel: String, color: Color) -> some View {
         HStack {
-            Image(systemName: "circle.fill")
-                .font(.system(size: 6))
-                .foregroundColor(color)
-                .frame(width: 24, height: 24)
-            
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.body)
