@@ -3,6 +3,14 @@
     <channel>
         <title>Shrink</title>
         <item>
+            <title>1.0.4</title>
+            <pubDate>Fri, 10 Jul 2026 05:28:59 +0000</pubDate>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <enclosure url="https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/Shrink-v1.0.5.dmg" length="5660023" type="application/octet-stream" sparkle:edSignature="wpB+f40HUxwXoDSq1XgXTl1JKvtpBJmrwXJ0MuWmYV7CnMJtjSdUHJhES7sRihUZ50quC+u/KpIJKIGyd3DXCA=="/>
+        </item>
+        <item>
             <title>1.0.2</title>
             <pubDate>Wed, 08 Jul 2026 04:19:37 +0000</pubDate>
             <sparkle:version>3</sparkle:version>
