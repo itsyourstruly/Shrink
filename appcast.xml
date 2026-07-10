@@ -4,11 +4,19 @@
         <title>Shrink</title>
         <item>
             <title>1.0.4</title>
+<<<<<<< Updated upstream
             <pubDate>Fri, 10 Jul 2026 05:28:59 +0000</pubDate>
             <sparkle:version>5</sparkle:version>
             <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
             <enclosure url="https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/Shrink-v1.0.5.dmg" length="5660023" type="application/octet-stream" sparkle:edSignature="wpB+f40HUxwXoDSq1XgXTl1JKvtpBJmrwXJ0MuWmYV7CnMJtjSdUHJhES7sRihUZ50quC+u/KpIJKIGyd3DXCA=="/>
+=======
+            <pubDate>Fri, 10 Jul 2026 05:29:35 +0000</pubDate>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <enclosure url="https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/Shrink-v1.0.6.dmg" length="5660023" type="application/octet-stream" sparkle:edSignature="fcwTJXKBF1/7KJmTnzp0vtL/UAQprguc+vSuFeT2bjmevM6WMmx5NUWhTre8VXHc/qHCGKndOLRecuCVjpiVAA=="/>
+>>>>>>> Stashed changes
         </item>
         <item>
             <title>1.0.2</title>
