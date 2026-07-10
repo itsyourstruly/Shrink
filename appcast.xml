@@ -24,7 +24,11 @@
             <sparkle:version>3</sparkle:version>
             <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+<<<<<<< Updated upstream
             <enclosure url="https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/Shrink-v1.1.1.dmg" length="5674470" type="application/octet-stream" sparkle:edSignature="wjvLCPMw5ibpvCRbtB6HxNJ98MaOl6QdMNONT7QCZH3ew+pystgovIFiLVOHdXhbMn9EuX/mmsWdxETiA2iyDg=="/>
+=======
+            <enclosure url="https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/Shrink-v1.1.0.dmg" length="5674523" type="application/octet-stream" sparkle:edSignature="jQZ3h7wVrsn+5ISoLYBc3nJH+eAmcKWh/uaqqbyx6MamwZ0GHLP8LrSJxDmWAxBosDuSS9vEP8c/1gAm22T/Cg=="/>
+>>>>>>> Stashed changes
         </item>
     </channel>
 </rss>
