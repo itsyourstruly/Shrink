@@ -1,4 +1,4 @@
-name: Build, Sign, and Update Appcast
+name: Build, Sign, and Deploy Update
 
 on:
   push:
@@ -10,6 +10,8 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
+      pages: write      # Required to bundle the artifact for Pages
+      id-token: write   # Required for secure OIDC deployment authentication
 
     steps:
       - name: Checkout Code
@@ -37,7 +39,6 @@ jobs:
       - name: Prepare Packaging Directory
         run: |
           mkdir -p dist/dmg-root
-          # Recursively finds Shrink.app anywhere inside the Build folder
           APP_PATH=$(find Build -name "Shrink.app" -type d -maxdepth 4 | head -n 1)
           if [ -z "$APP_PATH" ]; then
             echo "Error: Shrink.app could not be found in the build directory."
@@ -48,7 +49,6 @@ jobs:
 
       - name: Unify Code Signatures
         run: |
-          # Forces the app and all embedded frameworks (like Sparkle) to share the exact same ad-hoc signature
           codesign --force --deep -s - dist/dmg-root/Shrink.app
 
       - name: Package App into DMG
@@ -70,35 +70,8 @@ jobs:
           mkdir sparkle-cli
           tar -xf sparkle.tar.xz -C sparkle-cli
 
-      - name: Generate Appcast XML
-        run: |
-          mkdir -p deploy
-          cp dist/*.dmg deploy/
-          
-          if [ -f appcast.xml ]; then
-            cp appcast.xml deploy/
-          fi
-          
-          # Pipes the private key securely from GitHub Secrets directly into the tool
-          echo "${{ secrets.SPARKLE_PRIVATE_KEY }}" | ./sparkle-cli/bin/generate_appcast --ed-key-file - deploy/
-          
-          cp deploy/appcast.xml ./appcast.xml
-
-      - name: Commit and Push Updated Appcast to Main Branch
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git stash --include-untracked || true
-          git checkout main
-          git pull origin main
-          git stash pop || true
-          
-          git add appcast.xml
-          git commit -m "Update appcast.xml for release ${{ github.ref_name }} [skip ci]" || echo "No changes to commit"
-          git push origin main
-
       - name: Create GitHub Release and Upload DMG
+        id: create_release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.dmg
@@ -106,3 +79,38 @@ jobs:
           body: "Automated distribution release for version ${{ github.ref_name }}."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Appcast XML (No Git Commit)
+        run: |
+          mkdir -p deploy
+          
+          # 1. Safely pull down your live public appcast file if it exists
+          curl -s -f "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/appcast.xml" -o deploy/appcast.xml || echo "No existing live appcast found. Generating fresh file."
+          
+          # 2. Copy the fresh DMG into the folder so Sparkle can extract its file size and metadata
+          cp dist/*.dmg deploy/
+          
+          # 3. Securely sign the entry and append/generate the new XML
+          echo "${{ secrets.SPARKLE_PRIVATE_KEY }}" | ./sparkle-cli/bin/generate_appcast --ed-key-file - deploy/
+          
+          # 4. Clean out the local DMG binary so we only publish the lightweight text file to Pages
+          rm deploy/*.dmg
+
+      - name: Upload Artifact for GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: deploy/
+
+  deploy-pages:
+    runs-on: ubuntu-latest
+    needs: release
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
