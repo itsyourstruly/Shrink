@@ -30,7 +30,16 @@ Table of Contents
 
 - File Conversion
   - Supports converting Image, Video, Audio, and Document files. 
-  - Uses Native ImageIO for Image conversion, AVFoundation for video and audio, and text-util and PDFKit for documents. 
+  - Uses Native ImageIO for Image conversion, AVFoundation for video and audio, and text-util and PDFKit for documents.
+ 
+
+## Installation
+- Install the .dmg file from the Releases page.
+- When downloaded, open it and move the app into the Applications folder.
+- Open the app. The app is not signed with an Apple Developer ID and will not open normally.
+- Open System Settings -> Privacy & Security and scroll to the bottom and choose "Open Anyway" for Shrink.
+
+- Shrink uses Sparkle updater
 
 ## Requirements
 
