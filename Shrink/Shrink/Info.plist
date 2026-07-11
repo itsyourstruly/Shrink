@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/Itsyourstruly/Shrink/main/appcast.xml</string>
+	<string>https://itsyourstruly.github.io/Shrink/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>8vw86bFWwPrPG2NERblya5qbUwuJGotKrO2ogsYqDa0=</string>
 </dict>
