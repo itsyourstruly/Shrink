@@ -230,8 +230,6 @@ nonisolated class FileConverter: @unchecked Sendable {
             }
             return nil
         }
-        
-        return nil
     }
     
     func convert(
@@ -731,7 +729,7 @@ nonisolated class FileConverter: @unchecked Sendable {
         // 3. MD / Markdown -> HTML / TXT / DOCX / RTF / ODT / PDF
         if srcExt == "md" || srcExt == "markdown" {
             let markdownContent = try String(contentsOf: inputURL, encoding: .utf8)
-            let htmlContent = MarkdownParser.toHTML(markdownContent)
+            let htmlContent = await MarkdownParser.toHTML(markdownContent)
             
             if dstExt == "html" {
                 try htmlContent.write(to: outputURL, atomically: true, encoding: .utf8)
