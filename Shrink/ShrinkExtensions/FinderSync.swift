@@ -65,7 +65,12 @@ class FinderSync: FIFinderSync {
         
         // Root context menu item: "Shrink" parent menu
         let parentItem = NSMenuItem(title: "Shrink", action: nil, keyEquivalent: "")
-        parentItem.image = NSImage(systemSymbolName: "arrow.down.right.and.arrow.up.left", accessibilityDescription: "Shrink")
+        if #available(macOS 12.0, *) {
+            let config = NSImage.SymbolConfiguration(paletteColors: [.systemBlue])
+            parentItem.image = NSImage(systemSymbolName: "arrow.down.right.and.arrow.up.left", accessibilityDescription: "Shrink")?.withSymbolConfiguration(config)
+        } else {
+            parentItem.image = NSImage(systemSymbolName: "arrow.down.right.and.arrow.up.left", accessibilityDescription: "Shrink")
+        }
         
         let subMenu = NSMenu(title: "Shrink")
         
@@ -81,7 +86,6 @@ class FinderSync: FIFinderSync {
         if showArchive {
             let item = NSMenuItem(title: "Compress as Archive", action: #selector(compressAction(_:)), keyEquivalent: "")
             item.representedObject = "archive"
-            item.image = NSImage(systemSymbolName: "archivebox", accessibilityDescription: nil)
             subMenu.addItem(item)
         }
         
@@ -89,7 +93,6 @@ class FinderSync: FIFinderSync {
         if showImage {
             let item = NSMenuItem(title: "Compress Image", action: #selector(compressAction(_:)), keyEquivalent: "")
             item.representedObject = "image"
-            item.image = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
             subMenu.addItem(item)
         }
         
@@ -97,7 +100,6 @@ class FinderSync: FIFinderSync {
         if showVideo {
             let item = NSMenuItem(title: "Compress Video", action: #selector(compressAction(_:)), keyEquivalent: "")
             item.representedObject = "video"
-            item.image = NSImage(systemSymbolName: "video", accessibilityDescription: nil)
             subMenu.addItem(item)
         }
         
@@ -105,14 +107,12 @@ class FinderSync: FIFinderSync {
         if showAudio {
             let item = NSMenuItem(title: "Compress Audio", action: #selector(compressAction(_:)), keyEquivalent: "")
             item.representedObject = "audio"
-            item.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
             subMenu.addItem(item)
         }
         
         // 5. Convert to...
         if showConvert {
             let convertItem = NSMenuItem(title: "Convert to", action: nil, keyEquivalent: "")
-            convertItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
             
             let convertSubMenu = NSMenu(title: "Convert to")
             let formats = getConversionFormats(for: selectedItems)

@@ -2483,58 +2483,128 @@ class AppState {
                     win.orderOut(nil)
                 }
             }
-        }
-        
-        if host == "compress" {
-            let typeParam = components?.queryItems?.first(where: { $0.name == "type" })?.value ?? "archive"
             
+            // Prepare files and load metadata
             self.clearFiles()
+            self.isProcessing = true
+            self.activeJobTitle = "Preparing files..."
+            self.currentProgress = 0.0
             
+            var loadedItems: [FileItem] = []
             for p in paths {
-                let item = FileItem(url: p)
-                self.selectedFiles.append(item)
+                let cleanURL = p.resolvingSymlinksInPath().standardized
+                var item = FileItem(url: cleanURL)
+                
+                if item.isDirectory {
+                    let scanResult = await FileItem.calculateFolderMetadataAsync(at: cleanURL)
+                    item.originalSize = scanResult.size
+                    item.detectedTypes = scanResult.detectedTypes
+                    item.typeCounts = scanResult.typeCounts
+                    item.typeSizes = scanResult.typeSizes
+                    item.subMediaItems = scanResult.subMediaItems
+                    item.extensionCounts = scanResult.extensionCounts
+                    item.subItems = []
+                } else {
+                    let meta = await FileMetadataReader.readMetadata(for: cleanURL)
+                    item.width = meta.width
+                    item.height = meta.height
+                    item.duration = meta.duration
+                    item.frameRate = meta.frameRate
+                    
+                    if item.fileType == .archive {
+                        let entries = await ArchiveCompressor.listContents(archiveURL: cleanURL)
+                        if !entries.isEmpty {
+                            var nodeMap: [String: FileItem] = [:]
+                            func makeVirtualItem(path: String, isDir: Bool, size: Int64) -> FileItem? {
+                                guard let virtualURL = URL(string: cleanURL.absoluteString + "/" + path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!) else { return nil }
+                                var virtual = FileItem(url: virtualURL)
+                                virtual.originalSize = size
+                                let detected = FileItem.getFileTypeForURL(URL(fileURLWithPath: path))
+                                virtual.detectedTypes = [detected]
+                                virtual.typeCounts = [detected: 1]
+                                virtual.typeSizes = [detected: size]
+                                virtual.isVirtualDirectory = isDir
+                                virtual.archiveEntryPath = path
+                                virtual.parentArchiveURL = cleanURL
+                                return virtual
+                            }
+
+                            var virtualSubItems: [FileItem] = []
+                            for (entryPath, entrySize, entryIsDir) in entries {
+                                let normalized = entryPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if normalized.isEmpty { continue }
+                                
+                                let components = normalized.split(separator: "/")
+                                var currentPath = ""
+                                
+                                for (i, comp) in components.enumerated() {
+                                    let isLast = i == components.count - 1
+                                    let parentPath = currentPath
+                                    currentPath = parentPath.isEmpty ? String(comp) : "\(parentPath)/\(comp)"
+                                    
+                                    if nodeMap[currentPath] == nil {
+                                        let itemIsDir = !isLast || entryIsDir
+                                        let itemSize = isLast ? entrySize : 0
+                                        if let virtualItem = makeVirtualItem(path: currentPath, isDir: itemIsDir, size: itemSize) {
+                                            nodeMap[currentPath] = virtualItem
+                                            if parentPath.isEmpty {
+                                                virtualSubItems.append(virtualItem)
+                                            } else if var parentNode = nodeMap[parentPath] {
+                                                parentNode.subItems.append(virtualItem)
+                                                nodeMap[parentPath] = parentNode
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            item.subItems = virtualSubItems
+                        }
+                    }
+                }
+                loadedItems.append(item)
             }
             
-            let filter: MediaFilter
-            switch typeParam {
-            case "image":
-                self.mode = .compress
-                filter = .imagesOnly
-            case "video":
-                self.mode = .compress
-                filter = .videosOnly
-            case "audio":
-                self.mode = .compress
-                filter = .audioOnly
-            case "archive":
-                self.mode = .compress
-                filter = .all
-            default:
-                self.mode = .compress
-                filter = .all
+            self.selectedFiles = loadedItems
+            self.updateModeBasedOnSelection()
+            
+            if host == "compress" {
+                let typeParam = components?.queryItems?.first(where: { $0.name == "type" })?.value ?? "archive"
+                
+                let filter: MediaFilter
+                switch typeParam {
+                case "image":
+                    self.mode = .compress
+                    filter = .imagesOnly
+                case "video":
+                    self.mode = .compress
+                    filter = .videosOnly
+                case "audio":
+                    self.mode = .compress
+                    filter = .audioOnly
+                case "archive":
+                    self.mode = .compress
+                    filter = .all
+                default:
+                    self.mode = .compress
+                    filter = .all
+                }
+                
+                self.startShrinking(filter: filter)
+                
+            } else if host == "convert" {
+                guard let formatParam = components?.queryItems?.first(where: { $0.name == "format" })?.value else {
+                    self.isProcessing = false
+                    return
+                }
+                
+                var overallTargets: [String: String] = [:]
+                for p in paths {
+                    let ext = p.pathExtension.lowercased()
+                    overallTargets[ext] = formatParam.uppercased()
+                }
+                
+                self.startBatchConversion(overallTargets: overallTargets)
             }
-            
-            self.startShrinking(filter: filter)
-            
-        } else if host == "convert" {
-            guard let formatParam = components?.queryItems?.first(where: { $0.name == "format" })?.value else {
-                return
-            }
-            
-            self.clearFiles()
-            
-            for p in paths {
-                let item = FileItem(url: p)
-                self.selectedFiles.append(item)
-            }
-            
-            var overallTargets: [String: String] = [:]
-            for p in paths {
-                let ext = p.pathExtension.lowercased()
-                overallTargets[ext] = formatParam.uppercased()
-            }
-            
-            self.startBatchConversion(overallTargets: overallTargets)
         }
     }
 }
