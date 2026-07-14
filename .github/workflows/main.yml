@@ -49,7 +49,19 @@ jobs:
 
       - name: Unify Code Signatures
         run: |
-          codesign --force --deep -s - dist/dmg-root/Shrink.app
+          # 1. Sign nested helper binaries
+          codesign --force -s - dist/dmg-root/Shrink.app/Contents/Resources/7zz
+          codesign --force -s - dist/dmg-root/Shrink.app/Contents/Resources/unar
+          
+          # 2. Sign embedded frameworks (Sparkle)
+          codesign --force --deep -s - dist/dmg-root/Shrink.app/Contents/Frameworks/Sparkle.framework
+          
+          # 3. Sign the Finder Sync Extension with its specific entitlements
+          codesign --force -s - --entitlements Shrink/ShrinkExtensions/ShrinkExtensions.entitlements dist/dmg-root/Shrink.app/Contents/PlugIns/ShrinkExtensions.appex
+          
+          # 4. Sign the main application with its specific entitlements
+          codesign --force -s - --entitlements Shrink/Shrink/Shrink.entitlements dist/dmg-root/Shrink.app
+
 
       - name: Package App into DMG
         run: |
