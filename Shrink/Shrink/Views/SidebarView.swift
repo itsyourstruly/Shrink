@@ -15,6 +15,7 @@ struct SidebarView: View {
     
     enum SidebarSection: String, CaseIterable, Identifiable {
         case general = "General"
+        case pdf = "PDF"
         case images = "Images"
         case videos = "Videos"
         case audio = "Audio"
@@ -25,6 +26,7 @@ struct SidebarView: View {
         var title: String {
             switch self {
             case .general: return "General Shrinking"
+            case .pdf: return "PDF Shrinking"
             case .images: return "Images Shrinking"
             case .videos: return "Videos Shrinking"
             case .audio: return "Audio Shrinking"
@@ -42,6 +44,8 @@ struct SidebarView: View {
     @State private var folderConvertTargets: [String: String] = [:]
     
     @State private var editingGeneralName = false
+    @State private var editingPdfName = false
+    @State private var editingPdfSuffix = false
     @State private var editingImageName = false
     @State private var editingVideoName = false
     @State private var editingAudioName = false
@@ -211,10 +215,6 @@ struct SidebarView: View {
                                     }
                                 }
                                 
-                                let detected = state.aggregateDetectedTypes
-                                if detected.contains(.pdf) {
-                                    pdfCompressorPanel
-                                }
                             }
                             
                             Divider()
@@ -309,6 +309,9 @@ struct SidebarView: View {
                             .padding(.top, 8)
                         }
                         
+                    case .pdf:
+                        pdfCompressorPanel
+                        
                     case .images:
                         imageCompressorPanel
                         
@@ -345,6 +348,9 @@ struct SidebarView: View {
             state.validateOutputStyles()
         }
         .onChange(of: state.videoOutputStyle) {
+            state.validateOutputStyles()
+        }
+        .onChange(of: state.pdfOutputStyle) {
             state.validateOutputStyles()
         }
     }
@@ -1249,18 +1255,176 @@ struct SidebarView: View {
     }
     
     private var pdfCompressorPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("PDF Optimization")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.secondary)
-            
-            Text("Standard PDF Size Reduction")
+        VStack(alignment: .leading, spacing: 12) {
+            // 1. Settings / Toggle
+            Toggle("Optimize PDF Documents", isOn: $state.pdfSettings.compressEnabled)
                 .font(.system(size: 12, weight: .semibold))
+                
+            if state.pdfSettings.compressEnabled {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("PDF Optimization")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    
+                    Text("Standard PDF Size Reduction")
+                        .font(.system(size: 12, weight: .semibold))
+                    
+                    Text("Shrink will re-process fonts, optimize internal resource tables, and compress embedded graphic streams using native PDFKit routines.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(3)
+                }
+                .padding(.leading, 16)
+            }
             
-            Text("Shrink will re-process fonts, optimize internal resource tables, and compress embedded graphic streams using native PDFKit routines.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineSpacing(3)
+            Divider()
+                .padding(.vertical, 4)
+            
+            // Destination options (sentence layout)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center, spacing: 4) {
+                    Menu {
+                        Button("Separate Files") {
+                            state.pdfOutputStyle = .individual
+                            editingPdfName = false
+                        }
+                        Button("Folder") {
+                            state.pdfOutputStyle = .subfolder
+                        }
+                        Button("Archive") {
+                            state.pdfOutputStyle = .archive
+                        }
+                    } label: {
+                        Text("Creating")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.primary)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    
+                    if state.pdfOutputStyle == .individual {
+                        Menu {
+                            Button("Separate Files") {
+                                state.pdfOutputStyle = .individual
+                                editingPdfName = false
+                            }
+                            Button("Folder") {
+                                state.pdfOutputStyle = .subfolder
+                            }
+                            Button("Archive") {
+                                state.pdfOutputStyle = .archive
+                            }
+                        } label: {
+                            Text("separate files")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.blue)
+                        }
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                    } else {
+                        if editingPdfName {
+                            TextField("", text: $state.pdfCustomOutputName)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.blue)
+                                .onSubmit {
+                                    editingPdfName = false
+                                }
+                                .frame(maxWidth: 150)
+                        } else {
+                            Text(state.pdfCustomOutputName.isEmpty ? "PDFs" : state.pdfCustomOutputName)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.blue)
+                                .onTapGesture {
+                                    editingPdfName = true
+                                }
+                        }
+                        
+                        if state.pdfOutputStyle == .archive {
+                            Text("as")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.primary)
+                            
+                            Menu {
+                                Button("ZIP") { state.pdfArchiveFormat = .zip }
+                                Button("TAR") { state.pdfArchiveFormat = .tar }
+                                Button("TAR.GZ") { state.pdfArchiveFormat = .tgz }
+                                if isSevenZipAvailable {
+                                    Button("7-Zip") { state.pdfArchiveFormat = .sevenZip }
+                                }
+                            } label: {
+                                Text(state.pdfArchiveFormat.rawValue.uppercased())
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.blue)
+                            }
+                            .menuStyle(.button)
+                            .buttonStyle(.plain)
+                        } else if state.pdfOutputStyle == .subfolder {
+                            Text("folder")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+                
+                if state.pdfOutputStyle == .individual {
+                    HStack(alignment: .center, spacing: 4) {
+                        Text("with suffix")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.primary)
+                        
+                        if editingPdfSuffix {
+                            TextField("", text: $state.pdfCustomSuffix)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.blue)
+                                .onSubmit {
+                                    editingPdfSuffix = false
+                                }
+                                .frame(maxWidth: 80)
+                        } else {
+                            Text(state.pdfCustomSuffix.isEmpty ? "\"none\"" : "\"\(state.pdfCustomSuffix)\"")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.blue)
+                                .onTapGesture {
+                                    editingPdfSuffix = true
+                                }
+                        }
+                    }
+                }
+                
+                HStack(alignment: .center, spacing: 4) {
+                    Text("in")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.primary)
+                    
+                    Text(state.resolvedOutputDirectory(for: .pdfOnly)?.path ?? "Choose Folder...")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.blue)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .onTapGesture {
+                            choosePdfFolder()
+                        }
+                }
+            }
+            .padding(.vertical, 4)
+            
+            // 3. Shrink Button (at the bottom)
+            Button(action: { state.startShrinking(filter: .pdfOnly) }) {
+                HStack {
+                    Spacer()
+                    Text("Shrink")
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                .padding(.vertical, 6)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .tint(.blue)
+            .disabled(state.isProcessing || !state.aggregateDetectedTypes.contains(.pdf))
+            .padding(.top, 8)
         }
         .padding(.vertical, 6)
     }
@@ -1428,6 +1592,19 @@ struct SidebarView: View {
         if panel.runModal() == .OK, let folder = panel.url {
             state.audioCustomOutputFolder = folder
             state.audioOutputLocationType = .custom
+        }
+    }
+    
+    private func choosePdfFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        
+        if panel.runModal() == .OK, let folder = panel.url {
+            state.pdfCustomOutputFolder = folder
+            state.pdfOutputLocationType = .custom
         }
     }
     

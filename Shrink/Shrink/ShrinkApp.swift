@@ -19,6 +19,10 @@ struct ShrinkApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(state: state)
+                .defaultAppStorage(UserDefaults.shared)
+                .onOpenURL { url in
+                    state.handleIncomingURL(url)
+                }
         }
         .commands {
             CommandGroup(after: .appInfo) {
@@ -30,6 +34,7 @@ struct ShrinkApp: App {
         }
         Settings {
             SettingsView(state: state)
+                .defaultAppStorage(UserDefaults.shared)
         }
     }
 }

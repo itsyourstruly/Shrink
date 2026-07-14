@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import FinderSync
 
 struct SettingsView: View {
     var state: AppState
@@ -28,6 +29,11 @@ struct SettingsView: View {
             PluginsSettingsView(state: state)
                 .tabItem {
                     Label("Plugins", systemImage: "puzzlepiece")
+                }
+            
+            FinderExtensionSettingsView()
+                .tabItem {
+                    Label("Finder Extension", systemImage: "contextualmenu")
                 }
             
             UpdateSettingsView(state: state)
@@ -816,5 +822,376 @@ struct UpdateSettingsView: View {
             Spacer()
         }
         .padding(24)
+    }
+}
+
+struct FinderExtensionSettingsView: View {
+    // MARK: - Soft in-app toggle (controls menu visibility in FinderSync.swift)
+    @AppStorage("finder_extension_enabled", store: .shared) private var isMenuEnabled = false
+    
+    // MARK: - Individual context menu item visibility
+    @AppStorage("finder_show_compress_archive", store: .shared) private var showCompressArchive = true
+    @AppStorage("finder_show_compress_image", store: .shared) private var showCompressImage = true
+    @AppStorage("finder_show_compress_video", store: .shared) private var showCompressVideo = true
+    @AppStorage("finder_show_compress_audio", store: .shared) private var showCompressAudio = true
+    @AppStorage("finder_show_convert_file", store: .shared) private var showConvertFile = true
+    
+    // MARK: - Default quality settings
+    @AppStorage("default_image_shrink_ratio", store: .shared) private var imageShrinkRatio = 0.8
+    @AppStorage("default_video_shrink_ratio", store: .shared) private var videoShrinkRatio = 0.7
+    @AppStorage("default_audio_bitrate", store: .shared) private var audioBitrate = 128000
+    @AppStorage("default_archive_compression_level", store: .shared) private var archiveLevel = 5
+    
+    // MARK: - OS-level extension state
+    /// Reflects whether macOS has the ShrinkExtensions Finder Sync extension
+    /// enabled in System Settings. Read from FIFinderSyncController — note this
+    /// can be briefly stale after app launch; we refresh on appear and foreground.
+    @State private var isSystemEnabled: Bool = false
+    
+    /// True while we're polling after sending the user to System Settings,
+    /// waiting for them to flip the switch.
+    @State private var isAwaitingUserEnable: Bool = false
+    
+    /// Whether the app is running from Xcode DerivedData (not a stable /Applications install).
+    /// Used to show a dev-only warning that registration may be flaky.
+    private var isRunningFromDerivedData: Bool {
+        Bundle.main.bundlePath.contains("/DerivedData/")
+    }
+    
+    // MARK: - Body
+    
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                
+                // MARK: Section 1: Master Toggle Card
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "square.stack.3d.up.fill")
+                            .font(.title2)
+                            .foregroundStyle(.blue)
+                            .frame(width: 32)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text("Finder Integration")
+                                    .font(.headline)
+                                statusBadge
+                            }
+                            Text("Right-click files in Finder to quickly compress or convert them.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        // Toggle is disabled until system-level extension is enabled
+                        Toggle("", isOn: $isMenuEnabled)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .disabled(!isSystemEnabled)
+                            .onChange(of: isMenuEnabled) { _, _ in
+                                notifySettingsChanged()
+                            }
+                    }
+                    
+                    // Call-to-action when not yet set up in System Settings
+                    if !isSystemEnabled {
+                        Divider()
+                            .padding(.top, 4)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("ShrinkExtensions must be enabled in System Settings before the Finder context menu can appear.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            
+                            Button(action: openSystemSettings) {
+                                HStack(spacing: 6) {
+                                    if isAwaitingUserEnable {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                            .frame(width: 14, height: 14)
+                                        Text("Waiting for you to enable it…")
+                                    } else {
+                                        Image(systemName: "macwindow.and.gearshape")
+                                        Text("Open System Settings to Enable Extension")
+                                    }
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(isAwaitingUserEnable)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
+                
+                // MARK: DerivedData dev warning (debug builds only)
+                #if DEBUG
+                if isRunningFromDerivedData {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Development Build")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                            Text("Running from Xcode may prevent ShrinkExtensions from appearing in System Settings. Copy the app to /Applications and run it once for reliable extension registration.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.08))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                #endif
+                
+                // MARK: Section 2 & 3: Only shown when fully active
+                if isSystemEnabled && isMenuEnabled {
+                    // Context Menu Actions
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Context Menu Actions")
+                                .font(.headline)
+                                .foregroundStyle(.blue)
+                            Text("Choose which options appear in the 'Shrink' right-click submenu.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 2)
+                        
+                        VStack(spacing: 8) {
+                            menuToggleRow(title: "Compress as Archive", icon: "archivebox", isEnabled: $showCompressArchive)
+                                .onChange(of: showCompressArchive) { notifySettingsChanged() }
+                            
+                            menuToggleRow(title: "Compress Image", icon: "photo", isEnabled: $showCompressImage)
+                                .onChange(of: showCompressImage) { notifySettingsChanged() }
+                            
+                            menuToggleRow(title: "Compress Video", icon: "video", isEnabled: $showCompressVideo)
+                                .onChange(of: showCompressVideo) { notifySettingsChanged() }
+                            
+                            menuToggleRow(title: "Compress Audio", icon: "waveform", isEnabled: $showCompressAudio)
+                                .onChange(of: showCompressAudio) { notifySettingsChanged() }
+                            
+                            menuToggleRow(title: "Convert File...", icon: "arrow.2.squarepath", isEnabled: $showConvertFile)
+                                .onChange(of: showConvertFile) { notifySettingsChanged() }
+                        }
+                    }
+                    .padding(12)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+                    
+                    // Default Quality & Shrink Amounts
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Default Quality & Shrink Amounts")
+                                .font(.headline)
+                                .foregroundStyle(.blue)
+                            Text("Configure the default compression levels when launching jobs from the Finder context menu.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 2)
+                        
+                        // Image Ratio
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Label("Default Image Quality", systemImage: "photo.on.rectangle")
+                                    .font(.body)
+                                Spacer()
+                                Text("\(Int(imageShrinkRatio * 100))%")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $imageShrinkRatio, in: 0.05...1.0, step: 0.05)
+                                .onChange(of: imageShrinkRatio) { notifySettingsChanged() }
+                        }
+                        
+                        // Video Ratio
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Label("Default Video Quality", systemImage: "film")
+                                    .font(.body)
+                                Spacer()
+                                Text("\(Int(videoShrinkRatio * 100))%")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $videoShrinkRatio, in: 0.05...1.0, step: 0.05)
+                                .onChange(of: videoShrinkRatio) { notifySettingsChanged() }
+                        }
+                        
+                        // Audio Bitrate
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Label("Default Audio Bitrate", systemImage: "waveform.path")
+                                    .font(.body)
+                                Spacer()
+                                Text("\(audioBitrate / 1000) kbps")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: Binding(
+                                get: { Double(audioBitrate) },
+                                set: { audioBitrate = Int($0) }
+                            ), in: 64000...320000, step: 32000)
+                            .onChange(of: audioBitrate) { notifySettingsChanged() }
+                        }
+                        
+                        // Archive Level
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Label("Default Archive Level", systemImage: "doc.zipper")
+                                    .font(.body)
+                                Spacer()
+                                Text(archiveLevelLabel(archiveLevel))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: Binding(
+                                get: { Double(archiveLevel) },
+                                set: { archiveLevel = Int($0) }
+                            ), in: 1...9, step: 1)
+                            .onChange(of: archiveLevel) { notifySettingsChanged() }
+                        }
+                    }
+                    .padding(12)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+                }
+                
+                // MARK: Section 4: Troubleshooting
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Troubleshooting")
+                            .font(.headline)
+                            .foregroundStyle(.blue)
+                        Text("If the context menu does not appear, use the button below to open the correct System Settings page. If that doesn't work, go to System Settings → General → Login Items & Extensions → Extensions → Finder and ensure ShrinkExtensions is checked.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Divider()
+                        .padding(.vertical, 2)
+                    
+                    Button(action: openSystemSettings) {
+                        Label("Open Extension Settings...", systemImage: "macwindow.and.gearshape")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(12)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
+            }
+            .padding(24)
+        }
+        .onAppear {
+            refreshSystemEnabledState()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+        ) { _ in
+            // User may have returned from System Settings — refresh real OS state
+            refreshSystemEnabledState()
+        }
+    }
+    
+    // MARK: - Status Badge
+    
+    @ViewBuilder
+    private var statusBadge: some View {
+        if isSystemEnabled && isMenuEnabled {
+            Label("Active", systemImage: "circle.fill")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.green)
+                .labelStyle(.titleAndIcon)
+        } else if isSystemEnabled && !isMenuEnabled {
+            Label("Registered", systemImage: "circle.fill")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.yellow)
+                .labelStyle(.titleAndIcon)
+        } else {
+            Label("Not Set Up", systemImage: "circle.fill")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.red)
+                .labelStyle(.titleAndIcon)
+        }
+    }
+    
+    // MARK: - Actions
+    
+    private func openSystemSettings() {
+        // Use the official API — navigates to the correct section in System Settings
+        FIFinderSyncController.showExtensionManagementInterface()
+        
+        // Start polling: check every 1.5s for up to 45s for the user to enable the extension
+        isAwaitingUserEnable = true
+        pollForExtensionEnabled(attemptsRemaining: 30)
+    }
+    
+    private func refreshSystemEnabledState() {
+        isSystemEnabled = FIFinderSyncController.isExtensionEnabled
+        // If system is now enabled and we were awaiting, stop polling
+        if isSystemEnabled {
+            isAwaitingUserEnable = false
+        }
+    }
+    
+    /// Recursively polls `FIFinderSyncController.isExtensionEnabled` every 1.5 seconds.
+    /// Stops when the extension becomes enabled or after `attemptsRemaining` checks.
+    private func pollForExtensionEnabled(attemptsRemaining: Int) {
+        guard attemptsRemaining > 0, isAwaitingUserEnable else {
+            isAwaitingUserEnable = false
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            refreshSystemEnabledState()
+            if !isSystemEnabled {
+                pollForExtensionEnabled(attemptsRemaining: attemptsRemaining - 1)
+            }
+        }
+    }
+    
+    // MARK: - Helpers
+    
+    @ViewBuilder
+    private func menuToggleRow(title: String, icon: String, isEnabled: Binding<Bool>) -> some View {
+        HStack {
+            Label(title, systemImage: icon)
+                .font(.body)
+            Spacer()
+            Toggle("", isOn: isEnabled)
+                .toggleStyle(.switch)
+                .labelsHidden()
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+    }
+    
+    private func archiveLevelLabel(_ level: Int) -> String {
+        switch level {
+        case 1: return "1 (Fastest)"
+        case 9: return "9 (Maximum)"
+        default: return "\(level)"
+        }
+    }
+    
+    private func notifySettingsChanged() {
+        NotificationCenter.default.post(name: .archiveSettingsChanged, object: nil)
     }
 }

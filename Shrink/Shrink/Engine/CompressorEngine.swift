@@ -143,6 +143,19 @@ final class CompressorEngine: @unchecked Sendable {
             }
         }
         
+        var accessingInputs: [(URL, Bool)] = []
+        for fileItem in job.selectedFiles {
+            let isAccessing = fileItem.url.startAccessingSecurityScopedResource()
+            accessingInputs.append((fileItem.url, isAccessing))
+        }
+        defer {
+            for (url, isAccessing) in accessingInputs {
+                if isAccessing {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+        }
+        
         if job.mode == .decompress {
             await runDecompression(job: job)
         } else {
@@ -174,46 +187,150 @@ final class CompressorEngine: @unchecked Sendable {
             guard let self = self, let state = self.state else { return }
             state.activeJobTitle = "Creating Archive: \(cleanArchiveName)..."
             state.currentProgress = 0.05
-            for i in 0..<state.selectedFiles.count {
-                if state.selectedFiles[i].isChecked {
-                    state.selectedFiles[i].status = .processing(progress: 0.05)
-                }
+            for i in 0..<job.selectedFiles.count {
+                state.setFileStatus(id: job.selectedFiles[i].id, status: .processing(progress: 0.05))
             }
         }
         
         let splitSize = job.archiveSettings.splitArchive ? job.archiveSettings.splitSize : nil
         let password = job.archiveSettings.passwordEnabled ? job.archiveSettings.password : nil
         
+        var tempStagingDirToDelete: URL? = nil
+        defer {
+            if let dir = tempStagingDirToDelete {
+                try? FileManager.default.removeItem(at: dir)
+            }
+        }
+        
         do {
-            // --- Direct Compression: No Staging ---
-            // Pass the selected file URLs directly to the archiver.
-            let urlsToArchive = job.selectedFiles.map { $0.url }
-            
             await MainActor.run { [weak self] in
                 self?.state?.compressionStats.registerActiveOutput(destinationURL)
             }
             
-            try await archiveCompressor.compress(
-                urls: urlsToArchive,
-                destinationURL: destinationURL,
-                format: format,
-                compressionLevel: job.archiveSettings.compressionLevel,
-                password: password,
-                splitSize: splitSize,
-                progressHandler: { progress in
-                    Task { @MainActor [weak self] in
-                        guard let self = self, let state = self.state else { return }
-                        state.currentProgress = progress
-                        let readBytes = Int64(Double(state.compressionStartTotalSize) * progress)
-                        state.compressionStats.setRead(readBytes)
-                         for i in 0..<state.selectedFiles.count {
-                             if state.selectedFiles[i].isChecked {
-                                 state.setFileStatus(id: state.selectedFiles[i].id, status: .processing(progress: progress))
-                             }
-                         }
+            if job.mediaFilter == .all {
+                // --- Direct Compression: No Staging ---
+                let urlsToArchive = job.selectedFiles.map { $0.url }
+                
+                try await archiveCompressor.compress(
+                    urls: urlsToArchive,
+                    destinationURL: destinationURL,
+                    format: format,
+                    compressionLevel: job.archiveSettings.compressionLevel,
+                    password: password,
+                    splitSize: splitSize,
+                    progressHandler: { progress in
+                        Task { @MainActor [weak self] in
+                            guard let self = self, let state = self.state else { return }
+                            state.currentProgress = progress
+                            let readBytes = Int64(Double(state.compressionStartTotalSize) * progress)
+                            state.compressionStats.setRead(readBytes)
+                            for i in 0..<job.selectedFiles.count {
+                                state.setFileStatus(id: job.selectedFiles[i].id, status: .processing(progress: progress))
+                            }
+                        }
+                    }
+                )
+            } else {
+                // --- Staging & Filtered Compression ---
+                let tempStagingDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                tempStagingDirToDelete = tempStagingDir
+                try FileManager.default.createDirectory(at: tempStagingDir, withIntermediateDirectories: true)
+                
+                let allStagingItems = collectStagingItems(from: job.selectedFiles)
+                let stagingItems = allStagingItems.filter { item in
+                    switch job.mediaFilter {
+                    case .all:
+                        return true
+                    case .imagesOnly:
+                        return item.fileType == .image
+                    case .videosOnly:
+                        return item.fileType == .video
+                    case .audioOnly:
+                        return item.fileType == .audio
+                    case .pdfOnly:
+                        return item.fileType == .pdf
                     }
                 }
-            )
+                
+                if stagingItems.isEmpty {
+                    let msg: String
+                    switch job.mediaFilter {
+                    case .all: msg = "No files found to archive."
+                    case .imagesOnly: msg = "No images found in the selected files."
+                    case .videosOnly: msg = "No videos found in the selected files."
+                    case .audioOnly: msg = "No audio files found in the selected files."
+                    case .pdfOnly: msg = "No PDF files found in the selected files."
+                    }
+                    throw NSError(domain: "CompressorEngineError", code: 20, userInfo: [NSLocalizedDescriptionKey: msg])
+                }
+                
+                let totalOriginalSize = stagingItems.reduce(0) { $0 + $1.originalSize }
+                let fileSizes = Dictionary(uniqueKeysWithValues: stagingItems.map { ($0.sourceURL, $0.originalSize) })
+                
+                let stats = await MainActor.run { self.state?.compressionStats }
+                let progressTracker = ParallelProgressTracker(
+                    totalSize: totalOriginalSize,
+                    fileSizes: fileSizes,
+                    stats: stats,
+                    updateHandler: { progress in
+                        Task { @MainActor [weak self] in
+                            guard let self = self, let state = self.state else { return }
+                            state.currentProgress = progress
+                        }
+                    },
+                    fileProgressHandler: { [weak self] url, progress in
+                        Task { @MainActor [weak self] in
+                            self?.state?.updateFileProgress(url: url, progress: progress)
+                        }
+                    }
+                )
+                
+                let imageItems = stagingItems.filter { $0.fileType == .image }
+                let videoItems = stagingItems.filter { $0.fileType == .video }
+                let audioItems = stagingItems.filter { $0.fileType == .audio }
+                let pdfItems = stagingItems.filter { $0.fileType == .pdf }
+                let otherItems = stagingItems.filter { ![.image, .video, .audio, .pdf].contains($0.fileType) }
+                
+                let imageLimit = laneManager.concurrencyLimit(for: .image)
+                let videoLimit = laneManager.concurrencyLimit(for: .video)
+                let audioLimit = max(1, imageLimit / 2)
+                let pdfLimit = max(1, imageLimit / 2)
+                let otherLimit = max(1, imageLimit / 2)
+                
+                async let imageBatch = processItems(imageItems, concurrency: imageLimit) { [self] item in
+                    try await processMediaItem(item, destDir: tempStagingDir, job: job, progressTracker: progressTracker)
+                }
+                async let videoBatch = processItems(videoItems, concurrency: videoLimit) { [self] item in
+                    try await processMediaItem(item, destDir: tempStagingDir, job: job, progressTracker: progressTracker)
+                }
+                async let audioBatch = processItems(audioItems, concurrency: audioLimit) { [self] item in
+                    try await processMediaItem(item, destDir: tempStagingDir, job: job, progressTracker: progressTracker)
+                }
+                async let pdfBatch = processItems(pdfItems, concurrency: pdfLimit) { [self] item in
+                    try await processMediaItem(item, destDir: tempStagingDir, job: job, progressTracker: progressTracker)
+                }
+                async let otherBatch = processItems(otherItems, concurrency: otherLimit) { [self] item in
+                    try await processMediaItem(item, destDir: tempStagingDir, job: job, progressTracker: progressTracker)
+                }
+                
+                let _ = try await (imageBatch, videoBatch, audioBatch, pdfBatch, otherBatch)
+                
+                if cancelled {
+                    throw NSError(domain: "CompressorEngineError", code: 99, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled."])
+                }
+                
+                let contents = try FileManager.default.contentsOfDirectory(at: tempStagingDir, includingPropertiesForKeys: nil, options: [])
+                
+                try await archiveCompressor.compress(
+                    urls: contents,
+                    destinationURL: destinationURL,
+                    format: format,
+                    compressionLevel: job.archiveSettings.compressionLevel,
+                    password: password,
+                    splitSize: splitSize,
+                    progressHandler: { _ in }
+                )
+            }
             
             if cancelled {
                 cleanUpOutput(destinationURL: destinationURL, isSplit: job.archiveSettings.splitArchive, splitSize: splitSize)
@@ -244,15 +361,14 @@ final class CompressorEngine: @unchecked Sendable {
                 state.isProcessing = false
                 state.stopTimer()
                 state.compressionStats.unregisterActiveOutput(destinationURL, finalSize: outputSize)
-                for i in 0..<state.selectedFiles.count {
-                    if state.selectedFiles[i].isChecked {
-                        if case .failed = state.selectedFiles[i].status {
-                            continue
-                        }
-                        state.setFileStatus(id: state.selectedFiles[i].id, status: .completed(newSize: outputSize, outputURL: destinationURL))
+                for i in 0..<job.selectedFiles.count {
+                    let fileItem = job.selectedFiles[i]
+                    if case .failed = fileItem.status {
+                        continue
                     }
+                    state.setFileStatus(id: fileItem.id, status: .completed(newSize: outputSize, outputURL: destinationURL))
                 }
-                let firstCheckedURL = state.selectedFiles.first(where: { $0.isChecked })?.url ?? destinationURL
+                let firstCheckedURL = job.selectedFiles.first?.url ?? destinationURL
                 state.compressionResult = CompressionResult(
                     originalSize: state.compressionStartTotalSize,
                     newSize: outputSize,
@@ -272,10 +388,8 @@ final class CompressorEngine: @unchecked Sendable {
                 state.isProcessing = false
                 state.stopTimer()
                 state.compressionStats.unregisterActiveOutput(destinationURL, finalSize: 0)
-                for i in 0..<state.selectedFiles.count {
-                    if state.selectedFiles[i].isChecked {
-                        state.setFileStatus(id: state.selectedFiles[i].id, status: .failed(message: errorMessage))
-                    }
+                for i in 0..<job.selectedFiles.count {
+                    state.setFileStatus(id: job.selectedFiles[i].id, status: .failed(message: errorMessage))
                 }
                 if !isCancelError {
                     state.compressionError = errorMessage
@@ -287,7 +401,43 @@ final class CompressorEngine: @unchecked Sendable {
     }
     
     private func compressIndividually(job: CompressionJob) async {
-        let stagingItems = collectStagingItems(from: job.selectedFiles)
+        let allStagingItems = collectStagingItems(from: job.selectedFiles)
+        let stagingItems = allStagingItems.filter { item in
+            switch job.mediaFilter {
+            case .all:
+                return true
+            case .imagesOnly:
+                return item.fileType == .image
+            case .videosOnly:
+                return item.fileType == .video
+            case .audioOnly:
+                return item.fileType == .audio
+            case .pdfOnly:
+                return item.fileType == .pdf
+            }
+        }
+        
+        if stagingItems.isEmpty {
+            let msg: String
+            switch job.mediaFilter {
+            case .all: msg = "No files found to compress."
+            case .imagesOnly: msg = "No images found in the selected files."
+            case .videosOnly: msg = "No videos found in the selected files."
+            case .audioOnly: msg = "No audio files found in the selected files."
+            case .pdfOnly: msg = "No PDF files found in the selected files."
+            }
+            await MainActor.run { [weak self] in
+                guard let self = self, let state = self.state else { return }
+                state.isProcessing = false
+                state.stopTimer()
+                state.showProcessingOverlay = false
+                for i in 0..<job.selectedFiles.count {
+                    state.setFileStatus(id: job.selectedFiles[i].id, status: .failed(message: msg))
+                }
+                state.compressionError = msg
+            }
+            return
+        }
         
         let totalOriginalSize = stagingItems.reduce(0) { $0 + $1.originalSize }
         let fileSizes = Dictionary(uniqueKeysWithValues: stagingItems.map { ($0.sourceURL, $0.originalSize) })
@@ -297,10 +447,8 @@ final class CompressorEngine: @unchecked Sendable {
             guard let self = self, let state = self.state else { return }
             state.activeJobTitle = "Compressing files (\(stagingItemCount) items)..."
             state.currentProgress = 0.05
-            for i in 0..<state.selectedFiles.count {
-                if state.selectedFiles[i].isChecked {
-                    state.selectedFiles[i].status = .processing(progress: 0.05)
-                }
+            for i in 0..<job.selectedFiles.count {
+                state.setFileStatus(id: job.selectedFiles[i].id, status: .processing(progress: 0.05))
             }
         }
         
@@ -325,11 +473,13 @@ final class CompressorEngine: @unchecked Sendable {
         let imageItems = stagingItems.filter { $0.fileType == .image }
         let videoItems = stagingItems.filter { $0.fileType == .video }
         let audioItems = stagingItems.filter { $0.fileType == .audio }
-        let otherItems = stagingItems.filter { ![.image, .video, .audio].contains($0.fileType) }
+        let pdfItems = stagingItems.filter { $0.fileType == .pdf }
+        let otherItems = stagingItems.filter { ![.image, .video, .audio, .pdf].contains($0.fileType) }
 
         let imageLimit = laneManager.concurrencyLimit(for: .image)
         let videoLimit = laneManager.concurrencyLimit(for: .video)
         let audioLimit = max(1, imageLimit / 2)
+        let pdfLimit = max(1, imageLimit / 2)
         let otherLimit = max(1, imageLimit / 2)
 
         do {
@@ -342,11 +492,14 @@ final class CompressorEngine: @unchecked Sendable {
             async let audioBatch = processItems(audioItems, concurrency: audioLimit) { [self] item in
                 try await processIndividualItem(item, job: job, progressTracker: progressTracker)
             }
+            async let pdfBatch = processItems(pdfItems, concurrency: pdfLimit) { [self] item in
+                try await processIndividualItem(item, job: job, progressTracker: progressTracker)
+            }
             async let otherBatch = processItems(otherItems, concurrency: otherLimit) { [self] item in
                 try await processIndividualItem(item, job: job, progressTracker: progressTracker)
             }
 
-            let _ = try await (imageBatch, videoBatch, audioBatch, otherBatch)
+            let _ = try await (imageBatch, videoBatch, audioBatch, pdfBatch, otherBatch)
             
             if cancelled {
                 throw NSError(domain: "CompressorEngineError", code: 99, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled."])
@@ -357,34 +510,34 @@ final class CompressorEngine: @unchecked Sendable {
             var totalNewSize: Int64 = 0
             for i in 0..<job.selectedFiles.count {
                 let fileItem = job.selectedFiles[i]
-                if fileItem.isChecked {
-                    let fileExt: String
-                    switch fileItem.fileType {
-                    case .image:
-                        fileExt = job.imageSettings.format.lowercased()
-                    case .video:
-                        fileExt = "mp4"
-                    case .audio:
-                        fileExt = job.audioSettings.format.lowercased()
-                    default:
-                        fileExt = fileItem.url.pathExtension
-                    }
-                    
-                    let cleanName = fileItem.url.deletingPathExtension().lastPathComponent
-                    if fileItem.isDirectory {
-                        let folderName = "\(cleanName)\(job.customSuffix)"
-                        let destFolderURL = job.outputDir.appendingPathComponent(folderName)
-                        let size = await FileItem.calculateFolderSizeAsync(at: destFolderURL)
-                        completedSizes[fileItem.id] = size
-                        completedURLs[fileItem.id] = destFolderURL
-                    } else {
-                        let outputName = "\(cleanName)\(job.customSuffix).\(fileExt)"
-                        let destFileURL = job.outputDir.appendingPathComponent(outputName)
-                        let attrs = try? FileManager.default.attributesOfItem(atPath: destFileURL.path)
-                        let size = attrs?[.size] as? Int64 ?? 0
-                        completedSizes[fileItem.id] = size
-                        completedURLs[fileItem.id] = destFileURL
-                    }
+                let fileExt: String
+                switch fileItem.fileType {
+                case .image:
+                    fileExt = job.imageSettings.format.lowercased()
+                case .video:
+                    fileExt = "mp4"
+                case .audio:
+                    fileExt = job.audioSettings.format.lowercased()
+                case .pdf:
+                    fileExt = "pdf"
+                default:
+                    fileExt = fileItem.url.pathExtension
+                }
+                
+                let cleanName = fileItem.url.deletingPathExtension().lastPathComponent
+                if fileItem.isDirectory {
+                    let folderName = "\(cleanName)\(job.customSuffix)"
+                    let destFolderURL = job.outputDir.appendingPathComponent(folderName)
+                    let size = await FileItem.calculateFolderSizeAsync(at: destFolderURL)
+                    completedSizes[fileItem.id] = size
+                    completedURLs[fileItem.id] = destFolderURL
+                } else {
+                    let outputName = "\(cleanName)\(job.customSuffix).\(fileExt)"
+                    let destFileURL = job.outputDir.appendingPathComponent(outputName)
+                    let attrs = try? FileManager.default.attributesOfItem(atPath: destFileURL.path)
+                    let size = attrs?[.size] as? Int64 ?? 0
+                    completedSizes[fileItem.id] = size
+                    completedURLs[fileItem.id] = destFileURL
                 }
             }
             
@@ -401,19 +554,17 @@ final class CompressorEngine: @unchecked Sendable {
                 state.isProcessing = false
                 state.stopTimer()
                 
-                for i in 0..<state.selectedFiles.count {
-                    let fileItem = state.selectedFiles[i]
-                    if fileItem.isChecked {
-                        if case .failed = fileItem.status {
-                            continue
-                        }
-                        let size = completedSizesCopy[fileItem.id] ?? 0
-                        let outputURL = completedURLsCopy[fileItem.id] ?? fileItem.url
-                        state.setFileStatus(id: fileItem.id, status: .completed(newSize: size, outputURL: outputURL))
+                for i in 0..<job.selectedFiles.count {
+                    let fileItem = job.selectedFiles[i]
+                    if case .failed = fileItem.status {
+                        continue
                     }
+                    let size = completedSizesCopy[fileItem.id] ?? 0
+                    let outputURL = completedURLsCopy[fileItem.id] ?? fileItem.url
+                    state.setFileStatus(id: fileItem.id, status: .completed(newSize: size, outputURL: outputURL))
                 }
-                let firstChecked = state.selectedFiles.first(where: { $0.isChecked })
-                let firstCheckedURL = firstChecked?.url ?? state.selectedFiles.first?.url ?? URL(fileURLWithPath: "")
+                let firstChecked = job.selectedFiles.first
+                let firstCheckedURL = firstChecked?.url ?? URL(fileURLWithPath: "")
                 let firstOutputURL = firstChecked.flatMap { completedURLsCopy[$0.id] } ?? completedURLsCopy.values.first ?? firstCheckedURL
                 state.compressionResult = CompressionResult(
                     originalSize: state.compressionStartTotalSize,
@@ -430,11 +581,8 @@ final class CompressorEngine: @unchecked Sendable {
                 guard let self = self, let state = self.state else { return }
                 state.isProcessing = false
                 state.stopTimer()
-                for i in 0..<state.selectedFiles.count {
-                    let fileItem = state.selectedFiles[i]
-                    if fileItem.isChecked {
-                        state.setFileStatus(id: fileItem.id, status: .failed(message: errorMessage))
-                    }
+                for i in 0..<job.selectedFiles.count {
+                    state.setFileStatus(id: job.selectedFiles[i].id, status: .failed(message: errorMessage))
                 }
                 if !isCancelError {
                     state.compressionError = errorMessage
@@ -458,7 +606,7 @@ final class CompressorEngine: @unchecked Sendable {
             await MainActor.run { [weak self] in
                 guard let self = self, let state = self.state else { return }
                 state.activeJobTitle = "Extracting: \(fileItem.name) (\(i+1)/\(job.selectedFiles.count))"
-                state.selectedFiles[i].status = .processing(progress: 0.2)
+                state.setFileStatus(id: fileItem.id, status: .processing(progress: 0.2))
             }
             
             var finalExtractDir = job.outputDir
@@ -486,7 +634,7 @@ final class CompressorEngine: @unchecked Sendable {
                             let currentProgress = startProg + fileProgress * fileWeight
                             state.currentProgress = currentProgress
                             state.compressionStats.setRead(Int64(Double(state.compressionStartTotalSize) * currentProgress))
-                            state.selectedFiles[i].status = .processing(progress: fileProgress)
+                            state.setFileStatus(id: fileItem.id, status: .processing(progress: fileProgress))
                         }
                     }
                 )
@@ -496,7 +644,7 @@ final class CompressorEngine: @unchecked Sendable {
                 await MainActor.run { [weak self] in
                     guard let self = self, let state = self.state else { return }
                     state.compressionStats.unregisterActiveOutput(finalExtractDir, finalSize: size)
-                    state.selectedFiles[i].status = .completed(newSize: 0, outputURL: finalExtractDir)
+                    state.setFileStatus(id: fileItem.id, status: .completed(newSize: 0, outputURL: finalExtractDir))
                     let currentProgress = Double(i + 1) / totalCount
                     state.currentProgress = currentProgress
                     state.compressionStats.setRead(Int64(Double(state.compressionStartTotalSize) * currentProgress))
@@ -506,7 +654,7 @@ final class CompressorEngine: @unchecked Sendable {
                 await MainActor.run { [weak self] in
                     guard let self = self, let state = self.state else { return }
                     state.compressionStats.unregisterActiveOutput(finalExtractDir, finalSize: size)
-                    state.selectedFiles[i].status = .failed(message: error.localizedDescription)
+                    state.setFileStatus(id: fileItem.id, status: .failed(message: error.localizedDescription))
                     let currentProgress = Double(i + 1) / totalCount
                     state.currentProgress = currentProgress
                     state.compressionStats.setRead(Int64(Double(state.compressionStartTotalSize) * currentProgress))
@@ -518,8 +666,8 @@ final class CompressorEngine: @unchecked Sendable {
             guard let self = self, let state = self.state else { return }
             state.isProcessing = false
             state.stopTimer()
-            let firstChecked = state.selectedFiles.first(where: { $0.isChecked })
-            let firstCheckedURL = firstChecked?.url ?? state.selectedFiles.first?.url ?? URL(fileURLWithPath: "")
+            let firstChecked = job.selectedFiles.first
+            let firstCheckedURL = firstChecked?.url ?? URL(fileURLWithPath: "")
             var firstExtractDir = job.outputDir
             if let first = firstChecked {
                 if job.decompressSettings.createSubfolder {
@@ -633,20 +781,7 @@ final class CompressorEngine: @unchecked Sendable {
     
     @MainActor
     private func markStatusFailed(for sourceURL: URL, message: String) {
-        guard let state = self.state else { return }
-        let standardPath = sourceURL.standardizedFileURL.path
-        for i in 0..<state.selectedFiles.count {
-            let fileItem = state.selectedFiles[i]
-            let itemPath = fileItem.url.standardizedFileURL.path
-            if itemPath == standardPath {
-                state.selectedFiles[i].status = .failed(message: message)
-            } else if fileItem.isDirectory {
-                let prefix = itemPath.hasSuffix("/") ? itemPath : itemPath + "/"
-                if standardPath.hasPrefix(prefix) {
-                    state.selectedFiles[i].status = .failed(message: message)
-                }
-            }
-        }
+        self.state?.updateFileFailed(url: sourceURL, message: message)
     }
     
     private func collectStagingItems(from selectedFiles: [FileItem]) -> [StagingItem] {
@@ -658,12 +793,10 @@ final class CompressorEngine: @unchecked Sendable {
 
         var items: [StagingItem] = []
         for fileItem in selectedFiles {
-            if fileItem.isChecked {
-                let url = fileItem.url
-                let baseDir = url.deletingLastPathComponent()
-                let prefixLength = baseDir.path.hasSuffix("/") ? baseDir.path.count : baseDir.path.count + 1
-                collectStagingItemsRecursive(in: fileItem, prefixLength: prefixLength, items: &items)
-            }
+            let url = fileItem.url
+            let baseDir = url.deletingLastPathComponent()
+            let prefixLength = baseDir.path.hasSuffix("/") ? baseDir.path.count : baseDir.path.count + 1
+            collectStagingItemsRecursive(in: fileItem, prefixLength: prefixLength, items: &items)
         }
         stagingCache[key] = items
         return items
@@ -671,9 +804,14 @@ final class CompressorEngine: @unchecked Sendable {
     
     private func collectStagingItemsRecursive(in item: FileItem, prefixLength: Int, items: inout [StagingItem]) {
         if item.isDirectory {
-            for subItem in item.subItems {
-                if subItem.isChecked {
-                    collectStagingItemsRecursive(in: subItem, prefixLength: prefixLength, items: &items)
+            if item.subItems.isEmpty {
+                let dirItems = collectStagingItemsFromDirectory(url: item.url, baseDir: item.url.deletingLastPathComponent(), prefixLength: prefixLength)
+                items.append(contentsOf: dirItems)
+            } else {
+                for subItem in item.subItems {
+                    if subItem.isChecked {
+                        collectStagingItemsRecursive(in: subItem, prefixLength: prefixLength, items: &items)
+                    }
                 }
             }
         } else {
@@ -686,6 +824,44 @@ final class CompressorEngine: @unchecked Sendable {
             )
             items.append(staging)
         }
+    }
+    
+    private func collectStagingItemsFromDirectory(url: URL, baseDir: URL, prefixLength: Int) -> [StagingItem] {
+        let fileManager = FileManager.default
+        let properties: [URLResourceKey] = [.fileSizeKey, .isDirectoryKey]
+        
+        let isAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if isAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        
+        guard let contents = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: properties, options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        
+        var items: [StagingItem] = []
+        for fileURL in contents {
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: Set(properties)) else { continue }
+            let isDir = resourceValues.isDirectory ?? false
+            
+            if isDir {
+                items.append(contentsOf: collectStagingItemsFromDirectory(url: fileURL, baseDir: baseDir, prefixLength: prefixLength))
+            } else {
+                let size = Int64(resourceValues.fileSize ?? 0)
+                let relPath = String(fileURL.path.dropFirst(prefixLength))
+                let fileType = getFileType(for: fileURL)
+                let staging = StagingItem(
+                    sourceURL: fileURL,
+                    relativePath: relPath,
+                    fileType: fileType,
+                    originalSize: size
+                )
+                items.append(staging)
+            }
+        }
+        return items
     }
     
     private func getFileType(for url: URL) -> FileType {
@@ -842,10 +1018,8 @@ final class CompressorEngine: @unchecked Sendable {
             guard let self = self, let state = self.state else { return }
             state.activeJobTitle = "Scanning Folder for Media..."
             state.currentProgress = 0.05
-            for i in 0..<state.selectedFiles.count {
-                if state.selectedFiles[i].isChecked {
-                    state.selectedFiles[i].status = .processing(progress: 0.05)
-                }
+            for i in 0..<job.selectedFiles.count {
+                state.setFileStatus(id: job.selectedFiles[i].id, status: .processing(progress: 0.05))
             }
         }
         
@@ -863,6 +1037,8 @@ final class CompressorEngine: @unchecked Sendable {
                     return item.fileType == .video
                 case .audioOnly:
                     return item.fileType == .audio
+                case .pdfOnly:
+                    return item.fileType == .pdf
                 }
             }
             
@@ -873,6 +1049,7 @@ final class CompressorEngine: @unchecked Sendable {
                 case .imagesOnly: msg = "No images found in the selected folders."
                 case .videosOnly: msg = "No videos found in the selected folders."
                 case .audioOnly: msg = "No audio files found in the selected folders."
+                case .pdfOnly: msg = "No PDF files found in the selected folders."
                 }
                 throw NSError(domain: "CompressorEngineError", code: 20, userInfo: [NSLocalizedDescriptionKey: msg])
             }
@@ -905,6 +1082,7 @@ final class CompressorEngine: @unchecked Sendable {
                 case .imagesOnly: title = "Compressing Images (\(mediaItems.count) files)..."
                 case .videosOnly: title = "Compressing Videos (\(mediaItems.count) files)..."
                 case .audioOnly: title = "Compressing Audio (\(mediaItems.count) files)..."
+                case .pdfOnly: title = "Compressing PDFs (\(mediaItems.count) files)..."
                 }
                 self?.state?.activeJobTitle = title
             }
@@ -940,15 +1118,14 @@ final class CompressorEngine: @unchecked Sendable {
                 state.currentProgress = 1.0
                 state.isProcessing = false
                 state.stopTimer()
-                for i in 0..<state.selectedFiles.count {
-                    if state.selectedFiles[i].isChecked {
-                        if case .failed = state.selectedFiles[i].status {
-                            continue
-                        }
-                        state.setFileStatus(id: state.selectedFiles[i].id, status: .completed(newSize: outputSize, outputURL: destinationURL))
+                for i in 0..<job.selectedFiles.count {
+                    let fileItem = job.selectedFiles[i]
+                    if case .failed = fileItem.status {
+                        continue
                     }
+                    state.setFileStatus(id: fileItem.id, status: .completed(newSize: outputSize, outputURL: destinationURL))
                 }
-                let firstCheckedURL = state.selectedFiles.first(where: { $0.isChecked })?.url ?? destinationURL
+                let firstCheckedURL = job.selectedFiles.first?.url ?? destinationURL
                 state.compressionResult = CompressionResult(
                     originalSize: state.compressionStartTotalSize,
                     newSize: outputSize,
@@ -966,10 +1143,8 @@ final class CompressorEngine: @unchecked Sendable {
                 guard let self = self, let state = self.state else { return }
                 state.isProcessing = false
                 state.stopTimer()
-                for i in 0..<state.selectedFiles.count {
-                    if state.selectedFiles[i].isChecked {
-                        state.setFileStatus(id: state.selectedFiles[i].id, status: .failed(message: errorMessage))
-                    }
+                for i in 0..<job.selectedFiles.count {
+                    state.setFileStatus(id: job.selectedFiles[i].id, status: .failed(message: errorMessage))
                 }
                 if !isCancelError {
                     state.compressionError = errorMessage
@@ -1171,6 +1346,13 @@ final class CompressorEngine: @unchecked Sendable {
         job: CompressionJob,
         progressTracker: ParallelProgressTracker
     ) async throws {
+        let isAccessingInput = item.sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if isAccessingInput {
+                item.sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        
         if cancelled {
             progressTracker.updateProgress(for: item.sourceURL, progress: 1.0)
             return

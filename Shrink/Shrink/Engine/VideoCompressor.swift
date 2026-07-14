@@ -24,6 +24,21 @@ nonisolated final class VideoCompressor: @unchecked Sendable {
     private var isCancelled = false
     private let cancelQueue = DispatchQueue(label: "shrink.video-cancel")
     
+    private var _activeProcess: Process?
+    private let processLock = NSLock()
+    private var activeProcess: Process? {
+        get {
+            processLock.lock()
+            defer { processLock.unlock() }
+            return _activeProcess
+        }
+        set {
+            processLock.lock()
+            defer { processLock.unlock() }
+            _activeProcess = newValue
+        }
+    }
+    
     func cancel() {
         cancelQueue.sync {
             isCancelled = true
@@ -31,6 +46,9 @@ nonisolated final class VideoCompressor: @unchecked Sendable {
         reader?.cancelReading()
         assetWriter?.cancelWriting()
         exportSession?.cancelExport()
+        processLock.lock()
+        _activeProcess?.terminate()
+        processLock.unlock()
     }
     
     private var cancelled: Bool {
@@ -45,6 +63,17 @@ nonisolated final class VideoCompressor: @unchecked Sendable {
             if isAccessingInput {
                 inputURL.stopAccessingSecurityScopedResource()
             }
+        }
+        
+        let useFFmpeg = UserDefaults.standard.bool(forKey: "use_ffmpeg_for_video_compression") && ExternalToolManager.isToolAvailable(.ffmpeg)
+        if useFFmpeg, let ffmpegPath = ExternalToolManager.findToolPath(.ffmpeg) {
+            return try await compressViaFFmpeg(
+                ffmpegPath: ffmpegPath,
+                inputURL: inputURL,
+                outputURL: outputURL,
+                settings: settings,
+                progressHandler: progressHandler
+            )
         }
         
         let asset = AVURLAsset(url: inputURL)
@@ -75,7 +104,9 @@ nonisolated final class VideoCompressor: @unchecked Sendable {
                 if let session = AVAssetExportSession(asset: asset, presetName: chosenPreset) {
                     self.exportSession = session
                     
-                    let tempOutputURL = outputURL.deletingLastPathComponent().appendingPathComponent(outputURL.lastPathComponent + ".tmp")
+                    let tempOutputURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString)
+                        .appendingPathExtension("mp4")
                     
                     // Remove temp file if it exists
                     if FileManager.default.fileExists(atPath: tempOutputURL.path) {
@@ -86,16 +117,7 @@ nonisolated final class VideoCompressor: @unchecked Sendable {
                     session.shouldOptimizeForNetworkUse = true
                     
                     // Estimate output file length once before export
-                    var estimatedLength: Int64 = 0
-                    if #available(macOS 15.0, *) {
-                        estimatedLength = await withCheckedContinuation { continuation in
-                            session.estimateOutputFileLength { size, _ in
-                                continuation.resume(returning: size)
-                            }
-                        }
-                    } else {
-                        estimatedLength = session.estimatedOutputFileLength
-                    }
+                    let estimatedLength = session.estimatedOutputFileLength
                     
                     // Monitor progress using the states sequence
                     let states = session.states(updateInterval: 0.1)
@@ -167,15 +189,14 @@ nonisolated final class VideoCompressor: @unchecked Sendable {
         progressHandler: @escaping @Sendable (Double, Int64?) -> Void
     ) async throws -> Int64 {
         
-        let tempOutputURL = outputURL.deletingLastPathComponent().appendingPathComponent(outputURL.lastPathComponent + ".tmp")
-        
-        // Remove temp file if it exists
-        if FileManager.default.fileExists(atPath: tempOutputURL.path) {
-            try? FileManager.default.removeItem(at: tempOutputURL)
-        }
-        
         let isProRes = settings.codec.hasPrefix("ProRes")
         let fileType: AVFileType = isProRes ? .mov : .mp4
+        
+        let tempOutputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(fileType == .mov ? "mov" : "mp4")
+        
+        // Remove temp file if it exists
         
         guard let reader = try? AVAssetReader(asset: asset),
               let writer = try? AVAssetWriter(outputURL: tempOutputURL, fileType: fileType) else {
@@ -195,7 +216,8 @@ nonisolated final class VideoCompressor: @unchecked Sendable {
         
         let naturalSize = try await videoTrack.load(.naturalSize)
         let transform = try await videoTrack.load(.preferredTransform)
-        let duration = try await asset.load(.duration).seconds
+        let rawDuration = try await asset.load(.duration).seconds
+        let duration = (rawDuration.isNaN || rawDuration <= 0) ? 1.0 : rawDuration
         let characteristics = try await videoTrack.load(.mediaCharacteristics)
         let isHDR = characteristics.contains(.containsHDRVideo)
         let estimatedDataRate = try await videoTrack.load(.estimatedDataRate)
@@ -464,48 +486,326 @@ nonisolated final class VideoCompressor: @unchecked Sendable {
         progressTracker: ProgressTrackerState?,
         progressHandler: (@Sendable (Double, Int64?) -> Void)?
     ) async throws {
-        let stream = AsyncStream<CMSampleBuffer?> { continuation in
-            input.requestMediaDataWhenReady(on: .global(qos: .userInitiated)) {
+        let isFinished = AtomicBool(false)
+        let stateLock = NSLock()
+        
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let queue = DispatchQueue(label: "shrink.video-transcode-serialize")
+            input.requestMediaDataWhenReady(on: queue) {
+                if isFinished.value { return }
+                
                 while input.isReadyForMoreMediaData {
                     if self.cancelled {
-                        continuation.yield(nil)
-                        continuation.finish()
+                        if !isFinished.value {
+                            isFinished.set(true)
+                            input.markAsFinished()
+                            continuation.resume(throwing: NSError(domain: "VideoCompressorError", code: 99, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled."]))
+                        }
                         return
                     }
                     
-                    if let buffer = output.copyNextSampleBuffer() {
-                        continuation.yield(buffer)
-                    } else {
-                        continuation.yield(nil)
-                        continuation.finish()
-                        return
+                    let shouldBreak: Bool = autoreleasepool {
+                        if let buffer = output.copyNextSampleBuffer() {
+                            if let duration = duration, let targetBitrate = targetBitrate, let tracker = progressTracker, let handler = progressHandler {
+                                let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer).seconds
+                                let progress = duration > 0 ? (timestamp / duration) : 0.0
+                                
+                                stateLock.lock()
+                                tracker.frameCount += 1
+                                let now = Date()
+                                let shouldReport = now.timeIntervalSince(tracker.lastReportedTime) >= 0.1
+                                if shouldReport {
+                                    tracker.lastReportedTime = now
+                                }
+                                stateLock.unlock()
+                                
+                                if shouldReport {
+                                    let estimatedBytes = Int64((Double(targetBitrate) * duration / 8.0) * progress)
+                                    handler(progress, estimatedBytes)
+                                }
+                            }
+                            
+                            if !input.append(buffer) {
+                                self.reader?.cancelReading()
+                                let err = self.assetWriter?.error ?? NSError(domain: "VideoCompressorError", code: 8, userInfo: [NSLocalizedDescriptionKey: "Failed to append buffer to writer."])
+                                if !isFinished.value {
+                                    isFinished.set(true)
+                                    input.markAsFinished()
+                                    continuation.resume(throwing: err)
+                                }
+                                return true
+                            }
+                            return false
+                        } else {
+                            if !isFinished.value {
+                                isFinished.set(true)
+                                input.markAsFinished()
+                                continuation.resume(returning: ())
+                            }
+                            return true
+                        }
+                    }
+                    if shouldBreak {
+                        break
                     }
                 }
             }
         }
+    }
+    
+    private func compressViaFFmpeg(
+        ffmpegPath: String,
+        inputURL: URL,
+        outputURL: URL,
+        settings: VideoSettings,
+        progressHandler: @escaping @Sendable (Double, Int64?) -> Void
+    ) async throws -> Int64 {
+        do {
+            // Try with hardware acceleration
+            return try await runFFmpegCompression(
+                ffmpegPath: ffmpegPath,
+                inputURL: inputURL,
+                outputURL: outputURL,
+                settings: settings,
+                useHardware: true,
+                progressHandler: progressHandler
+            )
+        } catch {
+            print("[FFMPEG DEBUG] Hardware accelerated encoding failed: \(error). Falling back to software encoding...")
+            // Fall back to software encoding
+            return try await runFFmpegCompression(
+                ffmpegPath: ffmpegPath,
+                inputURL: inputURL,
+                outputURL: outputURL,
+                settings: settings,
+                useHardware: false,
+                progressHandler: progressHandler
+            )
+        }
+    }
+    
+    private func runFFmpegCompression(
+        ffmpegPath: String,
+        inputURL: URL,
+        outputURL: URL,
+        settings: VideoSettings,
+        useHardware: Bool,
+        progressHandler: @escaping @Sendable (Double, Int64?) -> Void
+    ) async throws -> Int64 {
+        let tempOutputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(outputURL.pathExtension)
         
-        for await sampleBuffer in stream {
-            guard let buffer = sampleBuffer else { break }
-            
-            if let duration = duration, let targetBitrate = targetBitrate, let tracker = progressTracker, let handler = progressHandler {
-                let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer).seconds
-                let progress = duration > 0 ? (timestamp / duration) : 0.0
-                
-                tracker.frameCount += 1
-                let now = Date()
-                if now.timeIntervalSince(tracker.lastReportedTime) >= 0.1 {
-                    tracker.lastReportedTime = now
-                    let estimatedBytes = Int64((Double(targetBitrate) * duration / 8.0) * progress)
-                    handler(progress, estimatedBytes)
-                }
+        // Remove temp file if it exists
+        if FileManager.default.fileExists(atPath: tempOutputURL.path) {
+            try? FileManager.default.removeItem(at: tempOutputURL)
+        }
+        
+        let asset = AVURLAsset(url: inputURL)
+        let duration = try await asset.load(.duration).seconds
+        
+        var originalSize: Int64 = 10 * 1024 * 1024
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: inputURL.path),
+           let size = attrs[.size] as? Int64 {
+            originalSize = size
+        }
+        
+        var targetBitrate: Int
+        if settings.compressionMethod == .bitrate {
+            targetBitrate = settings.targetBitrateKbps * 1000
+        } else {
+            let sourceBitrate: Double
+            if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first,
+               let estRate = try? await videoTrack.load(.estimatedDataRate) {
+                sourceBitrate = Double(estRate)
+            } else {
+                sourceBitrate = duration > 0 ? (Double(originalSize) * 8.0 / duration) : 5_000_000
             }
-            
-            if !input.append(buffer) {
-                reader?.cancelReading()
-                throw NSError(domain: "VideoCompressorError", code: 8, userInfo: [NSLocalizedDescriptionKey: "Failed to append buffer to writer."])
+            targetBitrate = Int(sourceBitrate * settings.targetSizeRatio)
+        }
+        targetBitrate = max(200000, min(targetBitrate, 100_000_000))
+        
+        // Compute quality mapping for VideoToolbox (ranges 1 to 100)
+        let q: Int
+        if settings.compressionMethod == .bitrate {
+            let refBitrate = (settings.codec == "HEVC") ? 2500.0 : 5000.0
+            let ratio = Double(settings.targetBitrateKbps) / refBitrate
+            if ratio < 1.0 {
+                q = Int(15.0 + (ratio * 50.0))
+            } else {
+                q = Int(65.0 + (min(3.0, ratio - 1.0) / 2.0 * 25.0))
+            }
+        } else {
+            q = Int(15.0 + (settings.targetSizeRatio * 75.0))
+        }
+        let clampedQ = max(1, min(q, 100))
+        
+        var args = ["-y", "-i", inputURL.path]
+        
+        switch settings.codec {
+        case "HEVC":
+            if useHardware {
+                args += ["-c:v", "hevc_videotoolbox", "-q:v", "\(clampedQ)", "-tag:v", "hvc1"]
+            } else {
+                args += ["-c:v", "libx265", "-b:v", "\(targetBitrate)", "-preset", "veryfast", "-tag:v", "hvc1"]
+            }
+        case "H264":
+            if useHardware {
+                args += ["-c:v", "h264_videotoolbox", "-q:v", "\(clampedQ)"]
+            } else {
+                args += ["-c:v", "libx264", "-b:v", "\(targetBitrate)", "-preset", "veryfast"]
+            }
+        case "ProRes422":
+            let encoder = useHardware ? "prores_videotoolbox" : "prores_ks"
+            args += ["-c:v", encoder, "-profile:v", "2"]
+        case "ProRes422HQ":
+            let encoder = useHardware ? "prores_videotoolbox" : "prores_ks"
+            args += ["-c:v", encoder, "-profile:v", "3"]
+        case "ProRes422LT":
+            let encoder = useHardware ? "prores_videotoolbox" : "prores_ks"
+            args += ["-c:v", encoder, "-profile:v", "1"]
+        case "ProRes422Proxy":
+            let encoder = useHardware ? "prores_videotoolbox" : "prores_ks"
+            args += ["-c:v", encoder, "-profile:v", "0"]
+        case "ProRes4444":
+            let encoder = useHardware ? "prores_videotoolbox" : "prores_ks"
+            args += ["-c:v", encoder, "-profile:v", "4"]
+        default:
+            if useHardware {
+                args += ["-c:v", "h264_videotoolbox", "-q:v", "\(clampedQ)"]
+            } else {
+                args += ["-c:v", "libx264", "-b:v", "\(targetBitrate)", "-preset", "veryfast"]
             }
         }
         
-        input.markAsFinished()
+        if let targetW = settings.targetResolutionWidth, let targetH = settings.targetResolutionHeight {
+            var scaledWidth = targetW
+            var scaledHeight = targetH
+            
+            if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
+                let naturalSize = try await videoTrack.load(.naturalSize)
+                let transform = try await videoTrack.load(.preferredTransform)
+                let isPortrait = (transform.b != 0 && transform.c != 0)
+                if isPortrait {
+                    scaledWidth = min(targetW, targetH)
+                    scaledHeight = max(targetW, targetH)
+                } else {
+                    scaledWidth = max(targetW, targetH)
+                    scaledHeight = min(targetW, targetH)
+                }
+            }
+            scaledWidth = (scaledWidth / 2) * 2
+            scaledHeight = (scaledHeight / 2) * 2
+            
+            args += ["-vf", "scale=w=\(scaledWidth):h=\(scaledHeight)"]
+        }
+        
+        switch settings.audioMode {
+        case "Mute":
+            args += ["-an"]
+        case "Keep":
+            args += ["-c:a", "copy"]
+        case "Compress":
+            args += ["-c:a", "aac", "-b:a", "\(settings.audioBitrate)"]
+        default:
+            args += ["-c:a", "copy"]
+        }
+        
+        args.append(tempOutputURL.path)
+        
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+        process.arguments = args
+        
+        self.activeProcess = process
+        defer { self.activeProcess = nil }
+        
+        if cancelled {
+            throw NSError(domain: "VideoCompressorError", code: 99, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled."])
+        }
+        
+        let outputPipe = Pipe()
+        process.standardError = outputPipe
+        process.standardOutput = Pipe()
+        
+        var accumulatedStderr = ""
+        let stderrLock = NSLock()
+        
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+            } else if let chunk = String(data: data, encoding: .utf8) {
+                stderrLock.lock()
+                accumulatedStderr += chunk
+                stderrLock.unlock()
+                
+                if let processedSeconds = self.parseFFmpegTime(chunk) {
+                    let progress = duration > 0 ? min(0.99, processedSeconds / duration) : 0.0
+                    let estimatedBytes = Int64(Double(targetBitrate) * duration / 8.0 * progress)
+                    progressHandler(progress, estimatedBytes)
+                }
+            }
+        }
+        
+        try await runProcessAsync(process, errorAccumulator: {
+            stderrLock.lock()
+            defer { stderrLock.unlock() }
+            return accumulatedStderr
+        })
+        
+        if cancelled {
+            try? FileManager.default.removeItem(at: tempOutputURL)
+            throw NSError(domain: "VideoCompressorError", code: 99, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled."])
+        }
+        
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+        try FileManager.default.moveItem(at: tempOutputURL, to: outputURL)
+        
+        let attrs = try FileManager.default.attributesOfItem(atPath: outputURL.path)
+        let size = attrs[.size] as? Int64 ?? 0
+        progressHandler(1.0, size)
+        
+        return size
+    }
+    
+    private func parseFFmpegTime(_ line: String) -> Double? {
+        guard let range = line.range(of: "time=") else { return nil }
+        let timePart = line[range.upperBound...]
+        let cleanTimeStr = timePart.prefix { $0 != " " && $0 != "\n" && $0 != "\r" && $0 != "," }
+        let parts = cleanTimeStr.split(separator: ":")
+        if parts.count == 3 {
+            if let hours = Double(parts[0]),
+               let minutes = Double(parts[1]),
+               let seconds = Double(parts[2]) {
+                return hours * 3600.0 + minutes * 60.0 + seconds
+            }
+        } else if let seconds = Double(cleanTimeStr) {
+            return seconds
+        }
+        return nil
+    }
+    
+    private func runProcessAsync(_ process: Process, errorAccumulator: (() -> String)? = nil) async throws {
+        return try await withCheckedThrowingContinuation { continuation in
+            process.terminationHandler = { proc in
+                if proc.terminationStatus == 0 {
+                    continuation.resume()
+                } else {
+                    let details = errorAccumulator?() ?? ""
+                    let cleanDetails = details.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let displayMsg = cleanDetails.isEmpty ? "Process exit with code \(proc.terminationStatus)" : cleanDetails
+                    continuation.resume(throwing: NSError(domain: "VideoCompressorError", code: Int(proc.terminationStatus), userInfo: [NSLocalizedDescriptionKey: displayMsg]))
+                }
+            }
+            
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 }

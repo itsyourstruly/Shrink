@@ -240,6 +240,13 @@ nonisolated class FileConverter: @unchecked Sendable {
     ) async throws -> Int64 {
         resetCancelled()
         
+        let isAccessingInput = inputURL.startAccessingSecurityScopedResource()
+        defer {
+            if isAccessingInput {
+                inputURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        
         let srcExt = inputURL.pathExtension.lowercased()
         let dstExt = targetFormat.lowercased()
         
@@ -618,19 +625,25 @@ nonisolated class FileConverter: @unchecked Sendable {
                         return
                     }
                     
-                    if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-                        writerInput.append(sampleBuffer)
-                    } else {
-                        writerInput.markAsFinished()
-                        if reader.status == .completed {
-                            writer.finishWriting {
+                    let shouldBreak: Bool = autoreleasepool {
+                        if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
+                            writerInput.append(sampleBuffer)
+                            return false
+                        } else {
+                            writerInput.markAsFinished()
+                            if reader.status == .completed {
+                                writer.finishWriting {
+                                    continuation.resume()
+                                }
+                            } else {
+                                writer.cancelWriting()
                                 continuation.resume()
                             }
-                        } else {
-                            writer.cancelWriting()
-                            continuation.resume()
+                            return true
                         }
-                        return
+                    }
+                    if shouldBreak {
+                        break
                     }
                 }
             }
