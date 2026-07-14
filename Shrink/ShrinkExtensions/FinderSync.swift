@@ -2,83 +2,234 @@
 //  FinderSync.swift
 //  ShrinkExtensions
 //
-//  Created by Matthew Nakhel on 6/24/26.
-//
 
 import Cocoa
 import FinderSync
 
-class FinderSync: FIFinderSync {
+// Duplicate UserDefaults.shared locally for the extension bundle
+extension UserDefaults {
+    static let sharedSuiteName = "group.amo.Shrink"
+    
+    static var shared: UserDefaults {
+        return UserDefaults(suiteName: sharedSuiteName) ?? .standard
+    }
+}
 
-    var myFolderURL = URL(fileURLWithPath: "/Users/Shared/MySyncExtension Documents")
+class FinderSync: FIFinderSync {
     
     override init() {
         super.init()
         
         NSLog("FinderSync() launched from %@", Bundle.main.bundlePath as NSString)
         
-        // Set up the directory we are syncing.
-        FIFinderSyncController.default().directoryURLs = [self.myFolderURL]
-        
-        // Set up images for our badge identifiers. For demonstration purposes, this uses off-the-shelf images.
-        FIFinderSyncController.default().setBadgeImage(NSImage(named: NSImage.colorPanelName)!, label: "Status One" , forBadgeIdentifier: "One")
-        FIFinderSyncController.default().setBadgeImage(NSImage(named: NSImage.cautionName)!, label: "Status Two", forBadgeIdentifier: "Two")
+        // Observe root filesystem so the extension works in all Finder windows
+        FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: "/")]
     }
     
     // MARK: - Primary Finder Sync protocol methods
     
     override func beginObservingDirectory(at url: URL) {
-        // The user is now seeing the container's contents.
-        // If they see it in more than one view at a time, we're only told once.
         NSLog("beginObservingDirectoryAtURL: %@", url.path as NSString)
     }
     
-    
     override func endObservingDirectory(at url: URL) {
-        // The user is no longer seeing the container's contents.
         NSLog("endObservingDirectoryAtURL: %@", url.path as NSString)
-    }
-    
-    override func requestBadgeIdentifier(for url: URL) {
-        NSLog("requestBadgeIdentifierForURL: %@", url.path as NSString)
-        
-        // For demonstration purposes, this picks one of our two badges, or no badge at all, based on the filename.
-        let whichBadge = abs(url.path.hash) % 3
-        let badgeIdentifier = ["", "One", "Two"][whichBadge]
-        FIFinderSyncController.default().setBadgeIdentifier(badgeIdentifier, for: url)
     }
     
     // MARK: - Menu and toolbar item support
     
     override var toolbarItemName: String {
-        return "FinderSy"
+        return "Shrink"
     }
     
     override var toolbarItemToolTip: String {
-        return "FinderSy: Click the toolbar item for a menu."
+        return "Shrink: Compress or convert files quickly."
     }
     
     override var toolbarItemImage: NSImage {
-        return NSImage(named: NSImage.cautionName)!
+        return NSImage(systemSymbolName: "arrow.down.right.and.arrow.up.left", accessibilityDescription: "Shrink") ?? NSImage()
     }
     
     override func menu(for menuKind: FIMenuKind) -> NSMenu {
-        // Produce a menu for the extension.
-        let menu = NSMenu(title: "")
-        menu.addItem(withTitle: "Example Menu Item", action: #selector(sampleAction(_:)), keyEquivalent: "")
-        return menu
+        // Master switch check
+        let isEnabled = UserDefaults.shared.object(forKey: "finder_extension_enabled") as? Bool ?? false
+        guard isEnabled else { return NSMenu(title: "") }
+        
+        // Only show context menus when clicking on items (files or folders)
+        guard menuKind == .contextualMenuForItems else { return NSMenu(title: "") }
+        
+        let selectedItems = FIFinderSyncController.default().selectedItemURLs() ?? []
+        guard !selectedItems.isEmpty else { return NSMenu(title: "") }
+        
+        let mainMenu = NSMenu(title: "")
+        
+        // Root context menu item: "Shrink" parent menu
+        let parentItem = NSMenuItem(title: "Shrink", action: nil, keyEquivalent: "")
+        parentItem.image = NSImage(systemSymbolName: "arrow.down.right.and.arrow.up.left", accessibilityDescription: "Shrink")
+        
+        let subMenu = NSMenu(title: "Shrink")
+        
+        let defaults = UserDefaults.shared
+        
+        let showArchive = defaults.object(forKey: "finder_show_compress_archive") as? Bool ?? true
+        let showImage = defaults.object(forKey: "finder_show_compress_image") as? Bool ?? true
+        let showVideo = defaults.object(forKey: "finder_show_compress_video") as? Bool ?? true
+        let showAudio = defaults.object(forKey: "finder_show_compress_audio") as? Bool ?? true
+        let showConvert = defaults.object(forKey: "finder_show_convert_file") as? Bool ?? true
+        
+        // 1. Archive
+        if showArchive {
+            let item = NSMenuItem(title: "Compress as Archive", action: #selector(compressAction(_:)), keyEquivalent: "")
+            item.representedObject = "archive"
+            item.image = NSImage(systemSymbolName: "archivebox", accessibilityDescription: nil)
+            subMenu.addItem(item)
+        }
+        
+        // 2. Image
+        if showImage {
+            let item = NSMenuItem(title: "Compress Image", action: #selector(compressAction(_:)), keyEquivalent: "")
+            item.representedObject = "image"
+            item.image = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
+            subMenu.addItem(item)
+        }
+        
+        // 3. Video
+        if showVideo {
+            let item = NSMenuItem(title: "Compress Video", action: #selector(compressAction(_:)), keyEquivalent: "")
+            item.representedObject = "video"
+            item.image = NSImage(systemSymbolName: "video", accessibilityDescription: nil)
+            subMenu.addItem(item)
+        }
+        
+        // 4. Audio
+        if showAudio {
+            let item = NSMenuItem(title: "Compress Audio", action: #selector(compressAction(_:)), keyEquivalent: "")
+            item.representedObject = "audio"
+            item.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
+            subMenu.addItem(item)
+        }
+        
+        // 5. Convert to...
+        if showConvert {
+            let convertItem = NSMenuItem(title: "Convert to", action: nil, keyEquivalent: "")
+            convertItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
+            
+            let convertSubMenu = NSMenu(title: "Convert to")
+            let formats = getConversionFormats(for: selectedItems)
+            
+            if !formats.isEmpty {
+                for format in formats {
+                    let formatItem = NSMenuItem(title: format, action: #selector(convertAction(_:)), keyEquivalent: "")
+                    formatItem.representedObject = format
+                    convertSubMenu.addItem(formatItem)
+                }
+            } else {
+                let noFormatsItem = NSMenuItem(title: "No Formats Available", action: nil, keyEquivalent: "")
+                noFormatsItem.isEnabled = false
+                convertSubMenu.addItem(noFormatsItem)
+            }
+            
+            convertItem.submenu = convertSubMenu
+            subMenu.addItem(convertItem)
+        }
+        
+        if subMenu.items.isEmpty {
+            return NSMenu(title: "")
+        }
+        
+        parentItem.submenu = subMenu
+        mainMenu.addItem(parentItem)
+        
+        return mainMenu
     }
     
-    @IBAction func sampleAction(_ sender: AnyObject?) {
-        let target = FIFinderSyncController.default().targetedURL()
-        let items = FIFinderSyncController.default().selectedItemURLs()
+    @objc func compressAction(_ sender: NSMenuItem) {
+        guard let type = sender.representedObject as? String else { return }
+        let selectedItems = FIFinderSyncController.default().selectedItemURLs() ?? []
+        guard !selectedItems.isEmpty else { return }
         
-        let item = sender as! NSMenuItem
-        NSLog("sampleAction: menu item: %@, target = %@, items = ", item.title as NSString, target!.path as NSString)
-        for obj in items! {
-            NSLog("    %@", obj.path as NSString)
+        let encodedPaths = selectedItems.map { url in
+            Data(url.path.utf8).base64EncodedString()
+        }.joined(separator: ",")
+        
+        let urlString = "shrink://compress?type=\(type)&files=\(encodedPaths)"
+        if let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
         }
     }
-
+    
+    @objc func convertAction(_ sender: NSMenuItem) {
+        guard let format = sender.representedObject as? String else { return }
+        let selectedItems = FIFinderSyncController.default().selectedItemURLs() ?? []
+        guard !selectedItems.isEmpty else { return }
+        
+        let encodedPaths = selectedItems.map { url in
+            Data(url.path.utf8).base64EncodedString()
+        }.joined(separator: ",")
+        
+        let urlString = "shrink://convert?format=\(format)&files=\(encodedPaths)"
+        if let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    
+    private func getConversionFormats(for urls: [URL]) -> [String] {
+        guard !urls.isEmpty else { return [] }
+        
+        var isAllImage = true
+        var isAllVideo = true
+        var isAllAudio = true
+        var isAllDoc = true
+        
+        let defaults = UserDefaults.shared
+        let useFFmpeg = defaults.bool(forKey: "use_ffmpeg")
+        let useMagick = defaults.bool(forKey: "use_magick")
+        let usePandoc = defaults.bool(forKey: "use_pandoc")
+        
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            if !["png", "jpg", "jpeg", "heic", "heif", "webp", "gif", "tiff", "bmp", "avif"].contains(ext) {
+                isAllImage = false
+            }
+            if !["mp4", "mov", "m4v", "mkv", "avi", "webm", "flv"].contains(ext) {
+                isAllVideo = false
+            }
+            if !["mp3", "wav", "m4a", "flac", "aac", "ogg"].contains(ext) {
+                isAllAudio = false
+            }
+            if !["pdf", "docx", "txt", "rtf", "epub", "html", "odt", "md", "markdown"].contains(ext) {
+                isAllDoc = false
+            }
+        }
+        
+        if isAllImage {
+            var formats = ["PNG", "JPEG", "WebP", "HEIC"]
+            if useMagick {
+                formats.append(contentsOf: ["AVIF", "TIFF", "GIF", "BMP"])
+            }
+            return formats
+        } else if isAllVideo {
+            var formats = ["MP4", "MOV"]
+            if useFFmpeg {
+                formats.append(contentsOf: ["MKV", "AVI", "WebM", "ProRes"])
+            }
+            return formats
+        } else if isAllAudio {
+            var formats = ["WAV", "M4A", "FLAC", "AAC"]
+            if useFFmpeg {
+                formats.insert("MP3", at: 0)
+                formats.append("OGG")
+            }
+            return formats
+        } else if isAllDoc {
+            var formats = ["PDF", "DOCX", "TXT", "RTF"]
+            if usePandoc {
+                formats.append(contentsOf: ["ePub", "HTML", "Markdown"])
+            }
+            return formats
+        } else {
+            // Mixed selection defaults to standard archives
+            return ["ZIP", "7Z", "TAR"]
+        }
+    }
 }
-

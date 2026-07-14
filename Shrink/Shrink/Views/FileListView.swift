@@ -82,13 +82,25 @@ struct FileListView: View {
                 }
                 .padding(16)
             }
-            .dropDestination(for: URL.self) { items, location in
-                state.addFiles(urls: items)
-                return true
-            } isTargeted: { targeted in
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isDragOver = targeted
+            .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+                let group = DispatchGroup()
+                var urls: [URL] = []
+                let lock = NSLock()
+                for provider in providers {
+                    group.enter()
+                    _ = provider.loadObject(ofClass: URL.self) { url, error in
+                        defer { group.leave() }
+                        if let url = url {
+                            lock.lock()
+                            urls.append(url)
+                            lock.unlock()
+                        }
+                    }
                 }
+                group.notify(queue: .main) {
+                    state.addFiles(urls: urls)
+                }
+                return true
             }
             .overlay(
                 Group {
@@ -314,7 +326,7 @@ struct FileRowView: View {
                         
                     case .completed(let newSize, let outputURL):
                         HStack(spacing: 8) {
-                            if newSize > 0, (file.fileType == .image || file.fileType == .video) {
+                            if newSize > 0 && newSize < file.originalSize, (file.fileType == .image || file.fileType == .video) {
                                 Button("Compare") {
                                     openCompareWindow(original: file.url, compressed: outputURL, type: file.fileType)
                                 }
@@ -329,7 +341,7 @@ struct FileRowView: View {
                                 )
                             }
                             
-                            if newSize > 0 {
+                            if newSize > 0 && newSize < file.originalSize {
                                 let savings = Double(file.originalSize - newSize) / Double(file.originalSize)
                                 HStack(spacing: 4) {
                                     Text("-\(String(format: "%.0f%%", savings * 100))")

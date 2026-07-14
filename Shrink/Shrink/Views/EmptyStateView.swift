@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct EmptyStateView: View {
     @Bindable var state: AppState
@@ -39,14 +40,26 @@ struct EmptyStateView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
-        .dropDestination(for: URL.self) { items, location in
-            state.addFiles(urls: items)
-            return true
-        } isTargeted: { targeted in
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isDragOver = targeted
+        .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+                let group = DispatchGroup()
+                var urls: [URL] = []
+                let lock = NSLock()
+                for provider in providers {
+                    group.enter()
+                    _ = provider.loadObject(ofClass: URL.self) { url, error in
+                        defer { group.leave() }
+                        if let url = url {
+                            lock.lock()
+                            urls.append(url)
+                            lock.unlock()
+                        }
+                    }
+                }
+                group.notify(queue: .main) {
+                    state.addFiles(urls: urls)
+                }
+                return true
             }
-        }
     }
     
     // File browsing panel

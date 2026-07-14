@@ -45,6 +45,7 @@ enum MediaFilter: String, CaseIterable, Identifiable, Sendable {
     case imagesOnly = "Images Only"
     case videosOnly = "Videos Only"
     case audioOnly = "Audio Only"
+    case pdfOnly = "PDF Only"
     
     var id: String { rawValue }
 }
@@ -118,6 +119,13 @@ class AppState {
     // Files
     var selectedFiles: [FileItem] = []
     
+    // Finder Sync Extension Mode
+    var isFinderSyncMode: Bool = false
+    var wasLaunchedByFinderSync: Bool = false
+    
+    // Track progresses of individual files by URL (especially useful for folders)
+    var fileProgresses: [URL: Double] = [:]
+    
     // Active selection
     var selectedFileID: UUID? = nil
     
@@ -144,6 +152,14 @@ class AppState {
     var audioArchiveFormat: ArchiveFormat = .zip
     var audioCustomOutputName: String = ""
     var audioCustomSuffix: String = "_shrunk"
+    
+    // PDF-specific destination settings
+    var pdfOutputLocationType: OutputLocationType = .sameAsSource
+    var pdfCustomOutputFolder: URL? = nil
+    var pdfOutputStyle: OutputStyle = .individual
+    var pdfArchiveFormat: ArchiveFormat = .zip
+    var pdfCustomOutputName: String = ""
+    var pdfCustomSuffix: String = "_shrunk"
     
     // Conversion-specific destination settings
     var convertOutputLocationType: OutputLocationType = .sameAsSource
@@ -268,6 +284,19 @@ class AppState {
         
         UserDefaults.standard.register(defaults: defaults)
         
+        UserDefaults.shared.register(defaults: [
+            "finder_extension_enabled": false,
+            "finder_show_compress_archive": true,
+            "finder_show_compress_image": true,
+            "finder_show_compress_video": true,
+            "finder_show_compress_audio": true,
+            "finder_show_convert_file": true,
+            "default_image_shrink_ratio": 0.8,
+            "default_video_shrink_ratio": 0.7,
+            "default_audio_bitrate": 128000,
+            "default_archive_compression_level": 5
+        ])
+        
         // Listen for settings changes
         settingsObserver = NotificationCenter.default.addObserver(
             forName: .archiveSettingsChanged,
@@ -348,6 +377,18 @@ class AppState {
         
         let usePandoc = UserDefaults.standard.bool(forKey: "use_pandoc")
         UserDefaults.standard.set(usePandoc, forKey: "use_pandoc_for_document_conversion")
+        
+        let imgRatio = UserDefaults.shared.double(forKey: "default_image_shrink_ratio")
+        self.imageSettings.targetSizeRatio = imgRatio > 0 ? imgRatio : 0.8
+        
+        let vidRatio = UserDefaults.shared.double(forKey: "default_video_shrink_ratio")
+        self.videoSettings.targetSizeRatio = vidRatio > 0 ? vidRatio : 0.7
+        
+        let audBitrate = UserDefaults.shared.integer(forKey: "default_audio_bitrate")
+        self.audioSettings.bitrate = audBitrate > 0 ? audBitrate : 128000
+        
+        let archiveLevel = UserDefaults.shared.integer(forKey: "default_archive_compression_level")
+        self.archiveSettings.compressionLevel = archiveLevel > 0 ? archiveLevel : 5
         
         self.coerceDisabledFormats()
     }
@@ -499,6 +540,9 @@ class AppState {
         case .audioOnly:
             locationType = audioOutputLocationType
             customFolder = audioCustomOutputFolder
+        case .pdfOnly:
+            locationType = pdfOutputLocationType
+            customFolder = pdfCustomOutputFolder
         }
         
         return resolveURL(for: locationType, customFolder: customFolder)
@@ -524,11 +568,18 @@ class AppState {
         var newlyAddedID: UUID? = nil
         for url in urls {
             // Resolve file-reference or security-scoped URLs to standard file path URLs
-            let resolvedURL = url.standardizedFileURL
-            let cleanURL = resolvedURL
+            let cleanURL = url.resolvingSymlinksInPath().standardized
             
-            // Avoid duplicates
-            if !selectedFiles.contains(where: { $0.url == cleanURL }) {
+            // Avoid duplicates, but reset status if already completed or failed
+            if let existingIndex = selectedFiles.firstIndex(where: { $0.url.standardizedFileURL.path == cleanURL.standardizedFileURL.path }) {
+                let status = selectedFiles[existingIndex].status
+                switch status {
+                case .completed, .failed:
+                    selectedFiles[existingIndex].status = .pending
+                default:
+                    break
+                }
+            } else {
                 let item = FileItem(url: cleanURL)
                 selectedFiles.append(item)
                 if newlyAddedID == nil { newlyAddedID = item.id }
@@ -706,6 +757,11 @@ class AppState {
         
         if videoCustomOutputName.isEmpty || videoCustomOutputName == "videos_shrunk" || videoCustomOutputName == "archive_shrunk" || videoCustomOutputName.hasSuffix("_shrunk") {
             videoCustomOutputName = defaultVideoName
+        }
+        
+        let defaultPdfName = selectedFiles.count == 1 ? defaultName : "pdf_shrunk"
+        if pdfCustomOutputName.isEmpty || pdfCustomOutputName == "pdf_shrunk" || pdfCustomOutputName == "archive_shrunk" || pdfCustomOutputName.hasSuffix("_shrunk") {
+            pdfCustomOutputName = defaultPdfName
         }
     }
     
@@ -1086,6 +1142,10 @@ class AppState {
         // Update the item's subItems and ensure their checked state matches the parent.
         // The shallow scan now correctly calculates sub-directory sizes, so no extra loop is needed.
         item.subItems = scanResult.subItems
+        
+        // Resolve statuses from disk
+        resolveSubItemStatusesForFolder(item: &item)
+        
         setAllSubItemsCheckedRecursive(&item, checked: item.isChecked)
 
         // Write the modified item back into the main data structure.
@@ -1100,6 +1160,112 @@ class AppState {
                     self?.updateFileItem(id: subItem.id) { file in
                         file.originalSize = subItemSize
                     }
+                }
+            }
+        }
+    }
+    
+    func resolveSubItemStatusesForFolder(item: inout FileItem) {
+        let cleanName = item.url.deletingPathExtension().lastPathComponent
+        
+        var candidateDirs: [URL] = []
+        if case .completed(_, let destFolderURL) = item.status {
+            candidateDirs.append(destFolderURL)
+        }
+        
+        let filters: [MediaFilter] = [.all, .imagesOnly, .videosOnly, .audioOnly, .pdfOnly]
+        for filter in filters {
+            if let outputDir = resolvedOutputDirectory(for: filter) {
+                candidateDirs.append(outputDir)
+                let subfolderName = individualSubfolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Compressed_Files" : individualSubfolderName
+                candidateDirs.append(outputDir.appendingPathComponent(subfolderName))
+                
+                let suffixes = [customSuffix, videoCustomSuffix, imageCustomSuffix, audioCustomSuffix, pdfCustomSuffix, convertCustomSuffix, "_shrunk"]
+                for suffix in suffixes {
+                    candidateDirs.append(outputDir.appendingPathComponent("\(cleanName)\(suffix)"))
+                }
+            }
+        }
+        
+        let suffixes = Array(Set([
+            customSuffix,
+            videoCustomSuffix,
+            imageCustomSuffix,
+            audioCustomSuffix,
+            pdfCustomSuffix,
+            convertCustomSuffix,
+            ""
+        ]))
+        
+        for j in 0..<item.subItems.count {
+            let subItem = item.subItems[j]
+            if case .completed = subItem.status {
+                continue
+            }
+            
+            let subCleanName = subItem.url.deletingPathExtension().lastPathComponent
+            let parentPrefixLength = item.url.path.hasSuffix("/") ? item.url.path.count : item.url.path.count + 1
+            let relativeDir = subItem.url.deletingLastPathComponent()
+            let relativePathDir = String(relativeDir.path.dropFirst(parentPrefixLength))
+            
+            var resolvedTargetURL: URL? = nil
+            for destFolderURL in Array(Set(candidateDirs)) {
+                let targetSubfolderURL = relativePathDir.isEmpty ? destFolderURL : destFolderURL.appendingPathComponent(relativePathDir)
+                
+                let subExtensions = Array(Set([
+                    subItem.url.pathExtension.lowercased(),
+                    "mp4",
+                    imageSettings.format.lowercased(),
+                    audioSettings.format.lowercased(),
+                    "pdf"
+                ]))
+                
+                for suffix in suffixes {
+                    for ext in subExtensions {
+                        let targetName = "\(subCleanName)\(suffix).\(ext)"
+                        let testURL1 = targetSubfolderURL.appendingPathComponent(targetName)
+                        if FileManager.default.fileExists(atPath: testURL1.path) {
+                            resolvedTargetURL = testURL1
+                            break
+                        }
+                        let testURL2 = destFolderURL.deletingLastPathComponent().appendingPathComponent(targetName)
+                        if FileManager.default.fileExists(atPath: testURL2.path) {
+                            resolvedTargetURL = testURL2
+                            break
+                        }
+                    }
+                    if resolvedTargetURL != nil { break }
+                }
+                if resolvedTargetURL != nil { break }
+            }
+            
+            if let targetURL = resolvedTargetURL {
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: targetURL.path, isDirectory: &isDir) {
+                    if isDir.boolValue {
+                        item.subItems[j].status = .completed(newSize: 0, outputURL: targetURL)
+                        
+                        let subItemId = subItem.id
+                        Task.detached(priority: .background) {
+                            let size = await FileItem.calculateFolderSizeAsync(at: targetURL)
+                            await MainActor.run { [weak self] in
+                                self?.updateFileItem(id: subItemId) { file in
+                                    if case .completed(_, let outURL) = file.status {
+                                        file.status = .completed(newSize: size, outputURL: outURL)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if let attrs = try? FileManager.default.attributesOfItem(atPath: targetURL.path),
+                           let size = attrs[.size] as? Int64 {
+                            item.subItems[j].status = .completed(newSize: size, outputURL: targetURL)
+                        }
+                    }
+                }
+            } else {
+                if case .completed(_, let destURL) = item.status {
+                    item.subItems[j].status = .completed(newSize: 0, outputURL: destURL)
                 }
             }
         }
@@ -1220,6 +1386,7 @@ class AppState {
         isProcessing = true
         showProcessingOverlay = true
         currentProgress = 0.0
+        fileProgresses.removeAll()
         activeJobTitle = mode == .compress ? "Compressing files..." : "Decompressing files..."
         elapsedSeconds = 0
         estimatedSecondsRemaining = nil
@@ -1241,6 +1408,8 @@ class AppState {
             resolvedStyle = videoOutputStyle
         case .audioOnly:
             resolvedStyle = audioOutputStyle
+        case .pdfOnly:
+            resolvedStyle = pdfOutputStyle
         }
         
         // Resolve archive format based on filter
@@ -1254,6 +1423,8 @@ class AppState {
             resolvedArchiveSettings.format = videoArchiveFormat
         case .audioOnly:
             resolvedArchiveSettings.format = audioArchiveFormat
+        case .pdfOnly:
+            resolvedArchiveSettings.format = pdfArchiveFormat
         }
         
         // Resolve output name based on filter
@@ -1268,6 +1439,9 @@ class AppState {
         } else if filter == .audioOnly {
             resolvedOutputName = audioCustomOutputName.isEmpty ? "audio_shrunk" : audioCustomOutputName
             resolvedSuffix = audioCustomSuffix
+        } else if filter == .pdfOnly {
+            resolvedOutputName = pdfCustomOutputName.isEmpty ? "pdf_shrunk" : pdfCustomOutputName
+            resolvedSuffix = pdfCustomSuffix
         } else {
             resolvedOutputName = customOutputName
             resolvedSuffix = customSuffix
@@ -1355,6 +1529,11 @@ class AppState {
                 selectedFiles[i].status = .failed(message: "Cancelled")
             }
         }
+        
+        if wasLaunchedByFinderSync {
+            FinderSyncWindowManager.shared.closeProgressWindow()
+            NSApp.terminate(nil)
+        }
     }
     
     // Dismiss the completion/error overlay and return to file list
@@ -1363,6 +1542,11 @@ class AppState {
         compressionError = nil
         showProcessingOverlay = false
         throughputText = ""
+        
+        if wasLaunchedByFinderSync {
+            FinderSyncWindowManager.shared.closeProgressWindow()
+            NSApp.terminate(nil)
+        }
     }
     
     // Timer helper
@@ -1825,21 +2009,21 @@ class AppState {
     }
     
     func updateFileProgress(url: URL, progress: Double) {
-        if updateFileStatusRecursive(in: &selectedFiles, url: url, status: .processing(progress: progress)) {
-            recalculateAllFolderProgress()
-        }
+        fileProgresses[url] = progress
+        _ = updateFileStatusRecursive(in: &selectedFiles, url: url, status: .processing(progress: progress))
+        recalculateAllFolderProgress()
     }
     
     func updateFileCompleted(url: URL, newSize: Int64, outputURL: URL) {
-        if updateFileStatusRecursive(in: &selectedFiles, url: url, status: .completed(newSize: newSize, outputURL: outputURL)) {
-            recalculateAllFolderProgress()
-        }
+        fileProgresses[url] = 1.0
+        _ = updateFileStatusRecursive(in: &selectedFiles, url: url, status: .completed(newSize: newSize, outputURL: outputURL))
+        recalculateAllFolderProgress()
     }
     
     func updateFileFailed(url: URL, message: String) {
-        if updateFileStatusRecursive(in: &selectedFiles, url: url, status: .failed(message: message)) {
-            recalculateAllFolderProgress()
-        }
+        fileProgresses[url] = 1.0
+        _ = updateFileStatusRecursive(in: &selectedFiles, url: url, status: .failed(message: message))
+        recalculateAllFolderProgress()
     }
     
     func setFileStatus(id: UUID, status: FileStatus) {
@@ -1847,7 +2031,31 @@ class AppState {
             recalculateAllFolderProgress()
             // For @Observable to detect changes in nested struct properties, we need to signal the change.
             self.selectedFiles = self.selectedFiles
+            
+            if isProcessing {
+                updateBatchConversionProgress()
+            }
         }
+    }
+    
+    private func updateBatchConversionProgress() {
+        let files = selectedFiles.filter { $0.isChecked }
+        guard !files.isEmpty else { return }
+        
+        var totalProgress = 0.0
+        for f in files {
+            switch f.status {
+            case .completed:
+                totalProgress += 1.0
+            case .failed:
+                totalProgress += 1.0
+            case .processing(let prog):
+                totalProgress += prog
+            case .pending:
+                break
+            }
+        }
+        self.currentProgress = totalProgress / Double(files.count)
     }
     
     func setFolderConversionPending(id: UUID) {
@@ -1874,10 +2082,10 @@ class AppState {
         if item.isDirectory {
             for j in 0..<item.subItems.count {
                 if !isStatusFinal(item.subItems[j].status) {
-                    if case .completed(_, let outputURL) = status {
-                        setStatusRecursive(item: &item.subItems[j], status: .completed(newSize: item.subItems[j].originalSize, outputURL: outputURL))
-                    } else if case .failed(let message) = status {
+                    if case .failed(let message) = status {
                         setStatusRecursive(item: &item.subItems[j], status: .failed(message: message))
+                    } else if case .completed(_, let outputURL) = status {
+                        setStatusRecursive(item: &item.subItems[j], status: .completed(newSize: 0, outputURL: outputURL))
                     }
                 }
             }
@@ -1885,8 +2093,9 @@ class AppState {
     }
     
     private func updateFileStatusRecursive(in list: inout [FileItem], url: URL, status: FileStatus) -> Bool {
+        let targetPath = url.standardizedFileURL.path
         for i in 0..<list.count {
-            if list[i].url == url {
+            if list[i].url.standardizedFileURL.path == targetPath {
                 setStatusRecursive(item: &list[i], status: status)
                 return true
             }
@@ -1939,6 +2148,38 @@ class AppState {
         }
         
         guard item.isDirectory else { return }
+        
+        // If subItems is empty but we have subMediaItems, calculate progress using the flat list
+        if item.subItems.isEmpty {
+            guard !item.subMediaItems.isEmpty else { return }
+            let totalOriginalSize = item.subMediaItems.reduce(0) { $0 + $1.originalSize }
+            guard totalOriginalSize > 0 else { return }
+            
+            var completedBytes: Double = 0.0
+            var allCompletedOrFailed = true
+            
+            for subMedia in item.subMediaItems {
+                let progress = fileProgresses[subMedia.url] ?? 0.0
+                completedBytes += Double(subMedia.originalSize) * progress
+                if progress < 1.0 {
+                    allCompletedOrFailed = false
+                }
+            }
+            
+            // If the folder was explicitly set to completed or failed by the engine, do not override it
+            if isStatusFinal(item.status) {
+                return
+            }
+            
+            if allCompletedOrFailed {
+                item.status = .processing(progress: 0.99)
+            } else {
+                let progress = completedBytes / Double(totalOriginalSize)
+                item.status = .processing(progress: min(0.99, max(0.0, progress)))
+            }
+            return
+        }
+        
         let subItemsList = item.subItems
         guard !subItemsList.isEmpty else { return }
         
@@ -1976,6 +2217,11 @@ class AppState {
         }
         
         if allCompletedOrFailed {
+            // Crucial fix: If the parent folder status is already completed, do not overwrite it.
+            // This prevents status regression to .processing(progress: 0.99) or .completed with wrong URL.
+            if case .completed = item.status {
+                return
+            }
             if hasSuccess {
                 let folderOutputURL = lastOutputURL?.deletingLastPathComponent() ?? item.url
                 item.status = .completed(newSize: totalNewSize, outputURL: folderOutputURL)
@@ -1983,6 +2229,10 @@ class AppState {
                 item.status = .failed(message: failMessage.isEmpty ? "Folder compression failed" : failMessage)
             }
         } else {
+            // Crucial fix: If the parent folder status is already completed, do not overwrite it.
+            if case .completed = item.status {
+                return
+            }
             let progress = completedBytes / Double(totalOriginalSize)
             item.status = .processing(progress: min(0.99, max(0.0, progress)))
         }
@@ -2024,6 +2274,7 @@ class AppState {
         isProcessing = true
         showProcessingOverlay = true
         currentProgress = 0.0
+        fileProgresses.removeAll()
         activeJobTitle = mode == .compress ? "Compressing \(match.name)..." : "Decompressing \(match.name)..."
         elapsedSeconds = 0
         estimatedSecondsRemaining = nil
@@ -2097,6 +2348,10 @@ class AppState {
         isProcessing = true
         activeJobTitle = "Converting \(filesToConvert.count) files..."
         
+        let startTime = Date()
+        elapsedSeconds = 0
+        startTimer()
+        
         Task.detached(priority: .userInitiated) {
             await withTaskGroup(of: Void.self) { group in
                 for pair in filesToConvert {
@@ -2158,9 +2413,128 @@ class AppState {
                 await group.waitForAll()
             }
             
+            let elapsed = Int(Date().timeIntervalSince(startTime))
+            
             await MainActor.run {
+                self.stopTimer()
                 self.isProcessing = false
+                
+                if self.isFinderSyncMode {
+                    var totalOriginalSize: Int64 = 0
+                    var totalNewSize: Int64 = 0
+                    
+                    for pair in filesToConvert {
+                        totalOriginalSize += pair.item.originalSize
+                        if case .completed(let newSize, _) = pair.item.status {
+                            totalNewSize += newSize
+                        } else {
+                            totalNewSize += pair.item.originalSize
+                        }
+                    }
+                    
+                    if let firstItem = filesToConvert.first?.item {
+                        self.compressionResult = CompressionResult(
+                            originalSize: totalOriginalSize,
+                            newSize: totalNewSize,
+                            elapsedSeconds: elapsed,
+                            originalURL: firstItem.url,
+                            compressedURL: outputDir
+                        )
+                    }
+                }
             }
+        }
+    }
+    
+    func handleIncomingURL(_ url: URL) {
+        guard url.scheme == "shrink" else { return }
+        
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: true)
+        guard let host = url.host else { return }
+        
+        // Parse files param
+        guard let filesQueryItem = components?.queryItems?.first(where: { $0.name == "files" }),
+              let filesParam = filesQueryItem.value else {
+            return
+        }
+        
+        let paths = filesParam.split(separator: ",").compactMap { base64Str -> URL? in
+            guard let data = Data(base64Encoded: String(base64Str)),
+                  let path = String(data: data, encoding: .utf8) else {
+                return nil
+            }
+            return URL(fileURLWithPath: path)
+        }
+        
+        guard !paths.isEmpty else { return }
+        
+        // We are handling a Finder Sync action
+        self.isFinderSyncMode = true
+        self.wasLaunchedByFinderSync = true
+        
+        // Hide main window on MainActor and show the Finder Sync HUD
+        Task { @MainActor in
+            NSApp.setActivationPolicy(.accessory)
+            FinderSyncWindowManager.shared.showProgressWindow(state: self)
+            
+            // Hide main app window
+            NSApp.windows.forEach { win in
+                if win != FinderSyncWindowManager.shared.window && win.title == "Shrink" {
+                    win.orderOut(nil)
+                }
+            }
+        }
+        
+        if host == "compress" {
+            let typeParam = components?.queryItems?.first(where: { $0.name == "type" })?.value ?? "archive"
+            
+            self.clearFiles()
+            
+            for p in paths {
+                let item = FileItem(url: p)
+                self.selectedFiles.append(item)
+            }
+            
+            let filter: MediaFilter
+            switch typeParam {
+            case "image":
+                self.mode = .compress
+                filter = .imagesOnly
+            case "video":
+                self.mode = .compress
+                filter = .videosOnly
+            case "audio":
+                self.mode = .compress
+                filter = .audioOnly
+            case "archive":
+                self.mode = .compress
+                filter = .all
+            default:
+                self.mode = .compress
+                filter = .all
+            }
+            
+            self.startShrinking(filter: filter)
+            
+        } else if host == "convert" {
+            guard let formatParam = components?.queryItems?.first(where: { $0.name == "format" })?.value else {
+                return
+            }
+            
+            self.clearFiles()
+            
+            for p in paths {
+                let item = FileItem(url: p)
+                self.selectedFiles.append(item)
+            }
+            
+            var overallTargets: [String: String] = [:]
+            for p in paths {
+                let ext = p.pathExtension.lowercased()
+                overallTargets[ext] = formatParam.uppercased()
+            }
+            
+            self.startBatchConversion(overallTargets: overallTargets)
         }
     }
 }

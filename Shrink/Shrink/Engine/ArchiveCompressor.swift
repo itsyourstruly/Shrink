@@ -342,7 +342,7 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
         // Target split handling: if we need to split but it is NOT 7z (7z splits natively),
         // we compress to a temporary file first, then split it.
         let needsPostSplit = (splitSize != nil && splitSize! > 0 && format != .sevenZip)
-        let actualDestURL = needsPostSplit ? destDir.appendingPathComponent("shrink_temp_" + UUID().uuidString + "." + format.fileExtension) : destinationURL
+        let actualDestURL = needsPostSplit ? FileManager.default.temporaryDirectory.appendingPathComponent("shrink_temp_" + UUID().uuidString + "." + format.fileExtension) : destinationURL
         
         defer {
             if needsPostSplit {
@@ -426,7 +426,7 @@ nonisolated final class ArchiveCompressor: CancelableOperation, @unchecked Senda
             }.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
             
             if !parts.isEmpty {
-                let concatURL = destinationURL.appendingPathComponent("shrink_decompress_temp_" + UUID().uuidString + "." + targetExt)
+                let concatURL = FileManager.default.temporaryDirectory.appendingPathComponent("shrink_decompress_temp_" + UUID().uuidString + "." + targetExt)
                 tempConcatURL = concatURL
                 try concatenateFiles(partURLs: parts, outputURL: concatURL)
                 resolvedArchiveURL = concatURL

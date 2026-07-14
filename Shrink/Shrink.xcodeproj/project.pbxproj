@@ -11,6 +11,7 @@
 		B91F07C32FEC550600E1F5BF /* unar in Resources */ = {isa = PBXBuildFile; fileRef = B91F07C22FEC550600E1F5BF /* unar */; };
 		B91F07D62FEC7ED900E1F5BF /* ShrinkExtensions.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B91F07CE2FEC7ED900E1F5BF /* ShrinkExtensions.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B95FEE492FFDF53000AD5DD5 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = B95FEE482FFDF53000AD5DD5 /* Sparkle */; };
+		B9AABB012FFF000000E1F5BF /* FinderSync.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B9AABB002FFF000000E1F5BF /* FinderSync.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,6 +43,7 @@
 		B91F07C22FEC550600E1F5BF /* unar */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = unar; sourceTree = "<group>"; };
 		B91F07CE2FEC7ED900E1F5BF /* ShrinkExtensions.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShrinkExtensions.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B91FDB652FE73CD000E1F5BF /* Shrink.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Shrink.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B9AABB002FFF000000E1F5BF /* FinderSync.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = FinderSync.framework; path = System/Library/Frameworks/FinderSync.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -93,6 +95,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B95FEE492FFDF53000AD5DD5 /* Sparkle in Frameworks */,
+				B9AABB012FFF000000E1F5BF /* FinderSync.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -107,6 +110,7 @@
 				B91FDB662FE73CD000E1F5BF /* Products */,
 				B91F07C02FEC54F300E1F5BF /* 7zz */,
 				B91F07C22FEC550600E1F5BF /* unar */,
+				B9AABB002FFF000000E1F5BF /* FinderSync.framework */,
 			);
 			sourceTree = "<group>";
 		};
@@ -258,6 +262,7 @@
 		B91F07D92FEC7ED900E1F5BF /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ShrinkExtensions/ShrinkExtensions.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -290,6 +295,7 @@
 		B91F07DA2FEC7ED900E1F5BF /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ShrinkExtensions/ShrinkExtensions.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -449,9 +455,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = Shrink/Shrink.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 674BLKXUR9;
 				ENABLE_APP_SANDBOX = NO;
@@ -466,7 +473,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.5;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = amo.Shrink;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -485,9 +492,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = Shrink/Shrink.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 674BLKXUR9;
 				ENABLE_APP_SANDBOX = NO;
@@ -502,7 +510,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.5;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = amo.Shrink;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
