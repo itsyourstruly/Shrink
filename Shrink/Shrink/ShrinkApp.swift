@@ -23,7 +23,9 @@ struct ShrinkApp: App {
                 .onOpenURL { url in
                     state.handleIncomingURL(url)
                 }
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         }
+        .handlesExternalEvents(matching: ["*"])
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates...") {

@@ -48,7 +48,7 @@ struct ContentView: View {
     private func hideMainWindow() {
         DispatchQueue.main.async {
             NSApplication.shared.windows.forEach { window in
-                if window != FinderSyncWindowManager.shared.window && window.title == "Shrink" {
+                if window != FinderSyncWindowManager.shared.window {
                     window.orderOut(nil)
                 }
             }

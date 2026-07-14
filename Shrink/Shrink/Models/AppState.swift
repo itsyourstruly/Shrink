@@ -2479,7 +2479,7 @@ class AppState {
             
             // Hide main app window
             NSApp.windows.forEach { win in
-                if win != FinderSyncWindowManager.shared.window && win.title == "Shrink" {
+                if win != FinderSyncWindowManager.shared.window {
                     win.orderOut(nil)
                 }
             }

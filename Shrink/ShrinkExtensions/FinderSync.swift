@@ -15,6 +15,14 @@ extension UserDefaults {
     }
 }
 
+extension CharacterSet {
+    static let urlQueryValueAllowed: CharacterSet = {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return allowed
+    }()
+}
+
 class FinderSync: FIFinderSync {
     
     override init() {
@@ -152,7 +160,9 @@ class FinderSync: FIFinderSync {
             Data(url.path.utf8).base64EncodedString()
         }.joined(separator: ",")
         
-        let urlString = "shrink://compress?type=\(type)&files=\(encodedPaths)"
+        guard let escapedPaths = encodedPaths.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) else { return }
+        
+        let urlString = "shrink://compress?type=\(type)&files=\(escapedPaths)"
         if let url = URL(string: urlString) {
             NSWorkspace.shared.open(url)
         }
@@ -167,7 +177,9 @@ class FinderSync: FIFinderSync {
             Data(url.path.utf8).base64EncodedString()
         }.joined(separator: ",")
         
-        let urlString = "shrink://convert?format=\(format)&files=\(encodedPaths)"
+        guard let escapedPaths = encodedPaths.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) else { return }
+        
+        let urlString = "shrink://convert?format=\(format)&files=\(escapedPaths)"
         if let url = URL(string: urlString) {
             NSWorkspace.shared.open(url)
         }
